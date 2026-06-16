@@ -211,6 +211,48 @@ class PayloadParsingTests(unittest.TestCase):
 
         self.assertIn("Template spec SpecWindwalkerMonk does not match WSE spec SpecBrewmasterMonk", str(ctx.exception))
 
+    def test_inject_wse_character_rejects_unknown_class_race_and_profession(self):
+        template = {
+            "raid": {
+                "parties": [
+                    {
+                        "players": [
+                            {
+                                "class": "ClassMonk",
+                                "race": "RaceOrc",
+                                "brewmaster_monk": {},
+                                "equipment": {"items": [{"id": 99}]},
+                            }
+                        ]
+                    }
+                ],
+                "num_active_parties": 1,
+            },
+            "encounter": {"duration": 300},
+            "sim_options": {"iterations": 10},
+            "type": "SimTypeIndividual",
+        }
+
+        cases = [
+            ({"class": "tinker", "race": "orc", "gear": {"items": []}}, "Could not parse WSE class 'tinker'"),
+            ({"class": "monk", "race": "naga", "gear": {"items": []}}, "Could not parse WSE race 'naga'"),
+            (
+                {
+                    "class": "monk",
+                    "race": "orc",
+                    "professions": [{"name": "Engineering"}, {"name": "Underwater Basket Weaving"}],
+                    "gear": {"items": []},
+                },
+                "Could not parse WSE profession 'Underwater Basket Weaving'",
+            ),
+        ]
+
+        for character, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaises(runner.RunnerError) as ctx:
+                    runner.inject_wse_character_into_request(template, character)
+                self.assertIn(expected, str(ctx.exception))
+
     def test_inject_wse_character_does_not_create_duplicate_sim_options_alias(self):
         template = {
             "raid": {

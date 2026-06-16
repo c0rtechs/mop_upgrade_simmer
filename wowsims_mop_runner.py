@@ -1358,6 +1358,30 @@ def professions_from_wse(professions: Any) -> tuple[str, str]:
     return vals[0], vals[1]
 
 
+def validate_wse_import_values(character: Mapping[str, Any]) -> None:
+    class_value = character.get("class")
+    if proto_enum_from_wse_class(class_value) == "ClassUnknown":
+        die(f"Could not parse WSE class {class_value!r}.")
+
+    race_value = character.get("race")
+    if proto_enum_from_wse_race(race_value) == "RaceUnknown":
+        die(f"Could not parse WSE race {race_value!r}.")
+
+    professions = character.get("professions")
+    if professions in (None, ""):
+        return
+    if not isinstance(professions, list):
+        die("WSE professions must be a list.")
+    for prof in professions:
+        name = prof.get("name") if isinstance(prof, Mapping) else prof
+        enum = (
+            PROFESSION_ENUM_BY_NAME.get(normalize_text(name))
+            or PROFESSION_ENUM_BY_NAME.get(normalize_key(name))
+        )
+        if not enum:
+            die(f"Could not parse WSE profession {name!r}.")
+
+
 def lower_camel_from_snake(value: str) -> str:
     parts = value.split("_")
     return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
@@ -1512,6 +1536,7 @@ def minimal_request_from_wse_character(
     iterations: int,
     glyph_spell_to_item: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
+    validate_wse_import_values(character)
     class_enum = proto_enum_from_wse_class(character.get("class"))
     race_enum = proto_enum_from_wse_race(character.get("race"))
     spec_field = spec_field_from_wse(character.get("class"), character.get("spec"))
@@ -1545,6 +1570,7 @@ def inject_wse_character_into_request(
     iterations: int | None = None,
     glyph_spell_to_item: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
+    validate_wse_import_values(character)
     req = copy.deepcopy(request)
     player = get_request_player(req)
     template_class = str(player.get("class") or player.get("class_") or "ClassUnknown")
