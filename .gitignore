@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+
+.wowsims_mop_runner/
+wowsims_mop_results/
+
+# Runtime dependency checkouts created beside the runner.
+mop/
+exporter/

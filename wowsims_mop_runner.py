@@ -1,0 +1,2084 @@
+#!/usr/bin/env python3
+"""
+wowsims_mop_runner.py
+
+Local orchestration helper for WoWSims MoP Classic + WowSimsExporter (WSE).
+
+What this script does:
+  * Ensures https://github.com/wowsims/mop is cloned/fast-forwarded beside this script.
+  * Ensures https://github.com/wowsims/exporter is cloned/fast-forwarded beside this script.
+  * Finds or downloads the latest wowsimcli release asset for the local OS, falling back to
+    building cmd/wowsimcli when Go is available.
+  * Prompts for a WSE addon export / wowsims share link / RaidSimRequest JSON / file path.
+  * Runs a normal sim, batch single/all-combination gear sims, or upgrade single-swap sims.
+  * Writes machine-readable JSON/CSV plus a markdown report.
+
+Important honesty note:
+  The current MoP wowsimcli exposes a low-level `sim` command that accepts a RaidSimRequest
+  protojson file. The browser UI owns some richer behavior such as Addon-import translation,
+  batch-sim UX, auto-gem/enchant/reforge workflows, and preset/default settings. This script
+  has adapters for all of that, but intentionally fails loudly when it cannot prove an upstream
+  optimizer/import adapter is available. This avoids producing fake "fully optimized" upgrade
+  results.
+
+Recommended usage for accurate results:
+  1) Paste your WSE export from `/wse export`.
+  2) Provide a known-good WoWSims share link or RaidSimRequest JSON from the UI for the same
+     class/spec when prompted. The script injects current gear/talents/glyphs from WSE into that
+     request so buffs/APL/encounter are preserved.
+  3) For batch/upgrade sims, paste the WSE bag export as well.
+
+Python: 3.10+
+Dependencies: stdlib only. External tools used when available: git, Go toolchain.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import contextlib
+import copy
+import csv
+import dataclasses
+import datetime as _dt
+import html
+import itertools
+import json
+import math
+import os
+import platform
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from pathlib import Path
+from typing import Any, Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence
+
+MOP_REPO_URL = "https://github.com/wowsims/mop"
+EXPORTER_REPO_URL = "https://github.com/wowsims/exporter"
+GITHUB_API = "https://api.github.com"
+WOWHEAD_MOP_CLASSIC_ITEM_URL = "https://www.wowhead.com/mop-classic/item={item_id}"
+
+SCRIPT_VERSION = "2026.06.16-1"
+
+# EquipmentSpec item order from WSE / WoWSims proto. WSE still includes a ranged slot
+# in the exported equipment layout; MoP proto ItemSlot only enumerates through offhand.
+GEAR_INDEX_TO_SLOT = {
+    0: "ItemSlotHead",
+    1: "ItemSlotNeck",
+    2: "ItemSlotShoulder",
+    3: "ItemSlotBack",
+    4: "ItemSlotChest",
+    5: "ItemSlotWrist",
+    6: "ItemSlotHands",
+    7: "ItemSlotWaist",
+    8: "ItemSlotLegs",
+    9: "ItemSlotFeet",
+    10: "ItemSlotFinger1",
+    11: "ItemSlotFinger2",
+    12: "ItemSlotTrinket1",
+    13: "ItemSlotTrinket2",
+    14: "ItemSlotMainHand",
+    15: "ItemSlotOffHand",
+    16: "ItemSlotRangedUnsupported",
+}
+SLOT_TO_INDEXES: dict[str, list[int]] = {}
+for idx, slot in GEAR_INDEX_TO_SLOT.items():
+    SLOT_TO_INDEXES.setdefault(slot, []).append(idx)
+
+ITEM_TYPE_TO_SLOT_INDEXES = {
+    "ItemTypeHead": [0],
+    "head": [0],
+    "ItemTypeNeck": [1],
+    "neck": [1],
+    "ItemTypeShoulder": [2],
+    "shoulder": [2],
+    "ItemTypeBack": [3],
+    "back": [3],
+    "cloak": [3],
+    "ItemTypeChest": [4],
+    "chest": [4],
+    "ItemTypeWrist": [5],
+    "wrist": [5],
+    "bracer": [5],
+    "ItemTypeHands": [6],
+    "hands": [6],
+    "gloves": [6],
+    "ItemTypeWaist": [7],
+    "waist": [7],
+    "belt": [7],
+    "ItemTypeLegs": [8],
+    "legs": [8],
+    "ItemTypeFeet": [9],
+    "feet": [9],
+    "boots": [9],
+    "ItemTypeFinger": [10, 11],
+    "finger": [10, 11],
+    "ring": [10, 11],
+    "ItemTypeTrinket": [12, 13],
+    "trinket": [12, 13],
+    "ItemTypeWeapon": [14, 15],
+    "weapon": [14, 15],
+    "ItemTypeRanged": [16],
+    "ranged": [16],
+}
+
+CLASS_ENUM_BY_WSE = {
+    "warrior": "ClassWarrior",
+    "paladin": "ClassPaladin",
+    "hunter": "ClassHunter",
+    "rogue": "ClassRogue",
+    "priest": "ClassPriest",
+    "deathknight": "ClassDeathKnight",
+    "death knight": "ClassDeathKnight",
+    "shaman": "ClassShaman",
+    "mage": "ClassMage",
+    "warlock": "ClassWarlock",
+    "monk": "ClassMonk",
+    "druid": "ClassDruid",
+}
+
+RACE_ENUM_BY_WSE = {
+    "bloodelf": "RaceBloodElf",
+    "blood elf": "RaceBloodElf",
+    "draenei": "RaceDraenei",
+    "dwarf": "RaceDwarf",
+    "gnome": "RaceGnome",
+    "human": "RaceHuman",
+    "nightelf": "RaceNightElf",
+    "night elf": "RaceNightElf",
+    "orc": "RaceOrc",
+    "tauren": "RaceTauren",
+    "troll": "RaceTroll",
+    "undead": "RaceUndead",
+    "scourge": "RaceUndead",
+    "worgen": "RaceWorgen",
+    "goblin": "RaceGoblin",
+    "pandaren (a)": "RaceAlliancePandaren",
+    "pandaren alliance": "RaceAlliancePandaren",
+    "alliance pandaren": "RaceAlliancePandaren",
+    "pandaren (h)": "RaceHordePandaren",
+    "pandaren horde": "RaceHordePandaren",
+    "horde pandaren": "RaceHordePandaren",
+    "pandaren": "RaceAlliancePandaren",
+}
+
+SPEC_ONEOF_FIELD_BY_WSE = {
+    "blood": "blood_death_knight",
+    "frost": "frost_death_knight",  # ambiguous DK/Mage; template injection is preferred.
+    "unholy": "unholy_death_knight",
+    "balance": "balance_druid",
+    "feral": "feral_druid",
+    "guardian": "guardian_druid",
+    "restoration": "restoration_druid",  # ambiguous Druid/Shaman; class disambiguated below.
+    "beastmastery": "beast_mastery_hunter",
+    "beast mastery": "beast_mastery_hunter",
+    "marksmanship": "marksmanship_hunter",
+    "survival": "survival_hunter",
+    "arcane": "arcane_mage",
+    "fire": "fire_mage",
+    "mistweaver": "mistweaver_monk",
+    "brewmaster": "brewmaster_monk",
+    "windwalker": "windwalker_monk",
+    "holy": "holy_paladin",  # ambiguous Priest/Paladin; class disambiguated below.
+    "protection": "protection_paladin",  # ambiguous Warrior/Paladin; class disambiguated below.
+    "retribution": "retribution_paladin",
+    "discipline": "discipline_priest",
+    "shadow": "shadow_priest",
+    "assassination": "assassination_rogue",
+    "combat": "combat_rogue",
+    "subtlety": "subtlety_rogue",
+    "elemental": "elemental_shaman",
+    "enhancement": "enhancement_shaman",
+    "affliction": "affliction_warlock",
+    "demonology": "demonology_warlock",
+    "destruction": "destruction_warlock",
+    "arms": "arms_warrior",
+    "fury": "fury_warrior",
+}
+
+SPEC_FIELD_BY_CLASS_AND_SPEC = {
+    ("paladin", "holy"): "holy_paladin",
+    ("paladin", "protection"): "protection_paladin",
+    ("warrior", "protection"): "protection_warrior",
+    ("priest", "holy"): "holy_priest",
+    ("druid", "restoration"): "restoration_druid",
+    ("shaman", "restoration"): "restoration_shaman",
+    ("mage", "frost"): "frost_mage",
+    ("deathknight", "frost"): "frost_death_knight",
+    ("death knight", "frost"): "frost_death_knight",
+}
+
+PROFESSION_ENUM_BY_NAME = {
+    "alchemy": "Alchemy",
+    "blacksmithing": "Blacksmithing",
+    "enchanting": "Enchanting",
+    "engineering": "Engineering",
+    "herbalism": "Herbalism",
+    "inscription": "Inscription",
+    "jewelcrafting": "Jewelcrafting",
+    "leatherworking": "Leatherworking",
+    "mining": "Mining",
+    "skinning": "Skinning",
+    "tailoring": "Tailoring",
+    "archeology": "Archeology",
+    "archaeology": "Archeology",
+}
+
+CLASS_ARMOR_MAX = {
+    "ClassWarrior": "ArmorTypePlate",
+    "ClassPaladin": "ArmorTypePlate",
+    "ClassDeathKnight": "ArmorTypePlate",
+    "ClassHunter": "ArmorTypeMail",
+    "ClassShaman": "ArmorTypeMail",
+    "ClassRogue": "ArmorTypeLeather",
+    "ClassMonk": "ArmorTypeLeather",
+    "ClassDruid": "ArmorTypeLeather",
+    "ClassPriest": "ArmorTypeCloth",
+    "ClassMage": "ArmorTypeCloth",
+    "ClassWarlock": "ArmorTypeCloth",
+}
+ARMOR_ORDER = ["ArmorTypeCloth", "ArmorTypeLeather", "ArmorTypeMail", "ArmorTypePlate"]
+
+# Conservative weapon usability by class. This should be tightened by Codex against game data / sim DB.
+CLASS_WEAPONS = {
+    "ClassMonk": {"WeaponTypeAxe", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeStaff", "WeaponTypeSword"},
+    "ClassWarrior": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeShield", "WeaponTypeStaff", "WeaponTypeSword"},
+    "ClassPaladin": {"WeaponTypeAxe", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeShield", "WeaponTypeSword"},
+    "ClassRogue": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypeSword"},
+    "ClassHunter": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeStaff", "WeaponTypeSword"},
+    "ClassDeathKnight": {"WeaponTypeAxe", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeSword"},
+    "ClassShaman": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypeShield", "WeaponTypeStaff"},
+    "ClassDruid": {"WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeStaff"},
+    "ClassPriest": {"WeaponTypeDagger", "WeaponTypeMace", "WeaponTypeStaff", "WeaponTypeOffHand"},
+    "ClassMage": {"WeaponTypeDagger", "WeaponTypeStaff", "WeaponTypeSword", "WeaponTypeOffHand"},
+    "ClassWarlock": {"WeaponTypeDagger", "WeaponTypeStaff", "WeaponTypeSword", "WeaponTypeOffHand"},
+}
+
+SOURCE_DIFFICULTY_NAMES = {
+    0: "Unknown",
+    1: "Normal",
+    2: "Heroic",
+    3: "10-player Raid",
+    4: "10-player Heroic Raid",
+    5: "25-player Raid",
+    6: "25-player Heroic Raid",
+    9: "Raid Finder",
+    11: "Flexible Raid",
+    12: "Vendor",
+    "DifficultyUnknown": "Unknown",
+    "DifficultyNormal": "Normal",
+    "DifficultyHeroic": "Heroic",
+    "DifficultyRaid10": "10-player Raid",
+    "DifficultyRaid10H": "10-player Heroic Raid",
+    "DifficultyRaid25": "25-player Raid",
+    "DifficultyRaid25H": "25-player Heroic Raid",
+    "DifficultyRaid25RF": "Raid Finder",
+    "DifficultyRaidFlex": "Flexible Raid",
+    "DifficultyVendor": "Vendor",
+}
+
+
+class RunnerError(RuntimeError):
+    """Expected user-facing failure."""
+
+
+@dataclasses.dataclass(frozen=True)
+class CommandResult:
+    args: list[str]
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+@dataclasses.dataclass
+class ItemMeta:
+    id: int
+    name: str = ""
+    type: str = ""
+    armor_type: str = ""
+    weapon_type: str = ""
+    hand_type: str = ""
+    ilvl: int | None = None
+    quality: str = ""
+    phase: int | None = None
+    class_allowlist: list[str] = dataclasses.field(default_factory=list)
+    required_profession: str = ""
+    sources: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    raw: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+
+@dataclasses.dataclass
+class SimRunResult:
+    label: str
+    request_path: Path
+    result_path: Path
+    dps: float | None
+    percent_change: float | None = None
+    item_id: int | None = None
+    item_name: str = ""
+    slot_index: int | None = None
+    slot: str = ""
+    source: str = ""
+    optimization_status: str = ""
+    error: str = ""
+    seconds: float = 0.0
+
+
+@dataclasses.dataclass
+class RunnerPaths:
+    root: Path
+    mop: Path
+    exporter: Path
+    cache: Path
+    bin_dir: Path
+    results: Path
+
+
+# ----------------------------- Generic utilities -----------------------------
+
+
+def info(message: str) -> None:
+    print(f"[info] {message}")
+
+
+def warn(message: str) -> None:
+    print(f"[warn] {message}", file=sys.stderr)
+
+
+def die(message: str, code: int = 2) -> None:
+    raise RunnerError(message)
+
+
+def normalize_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def normalize_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def utc_stamp() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+
+
+def run_cmd(
+    args: Sequence[str | os.PathLike[str]],
+    cwd: Path | None = None,
+    check: bool = True,
+    timeout: int | None = None,
+    env: Mapping[str, str] | None = None,
+) -> CommandResult:
+    cmd = [str(a) for a in args]
+    proc = subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        env=dict(os.environ, **dict(env or {})),
+    )
+    result = CommandResult(cmd, proc.returncode, proc.stdout, proc.stderr)
+    if check and proc.returncode != 0:
+        stderr = proc.stderr.strip() or proc.stdout.strip()
+        raise RunnerError(f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{stderr}")
+    return result
+
+
+def read_json_file(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_json_file(path: Path, data: Any, pretty: bool = True) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        if pretty:
+            json.dump(data, f, indent=2, sort_keys=False)
+            f.write("\n")
+        else:
+            json.dump(data, f, separators=(",", ":"), sort_keys=False)
+
+
+def safe_filename(label: str, max_len: int = 90) -> str:
+    label = re.sub(r"[^A-Za-z0-9_.@+-]+", "_", label.strip())
+    label = re.sub(r"_+", "_", label).strip("_") or "run"
+    return label[:max_len]
+
+
+def ensure_executable(path: Path) -> None:
+    if os.name == "nt":
+        return
+    mode = path.stat().st_mode
+    path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def http_json(url: str, timeout: int = 30) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json, application/json;q=0.9,*/*;q=0.1",
+            "User-Agent": f"wowsims-mop-runner/{SCRIPT_VERSION}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return json.loads(resp.read().decode(charset))
+
+
+def http_text(url: str, timeout: int = 30) -> str:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.1",
+            "User-Agent": f"wowsims-mop-runner/{SCRIPT_VERSION}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return resp.read().decode(charset, errors="replace")
+
+
+# ----------------------------- Git / repo setup ------------------------------
+
+
+def ensure_git_available() -> None:
+    if not shutil.which("git"):
+        die("git is required for clone/update but was not found on PATH.")
+
+
+def git_default_branch(repo_dir: Path) -> str:
+    for candidate in (
+        ["git", "remote", "show", "origin"],
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+    ):
+        result = run_cmd(candidate, cwd=repo_dir, check=False)
+        if result.returncode == 0:
+            text = result.stdout.strip()
+            m = re.search(r"HEAD branch:\s*(\S+)", text)
+            if m:
+                return m.group(1)
+            m = re.search(r"refs/remotes/origin/(\S+)$", text)
+            if m:
+                return m.group(1)
+    for branch in ("main", "master"):
+        res = run_cmd(["git", "rev-parse", "--verify", f"origin/{branch}"], cwd=repo_dir, check=False)
+        if res.returncode == 0:
+            return branch
+    return "master"
+
+
+def ensure_repo(repo_url: str, dest: Path, skip_update: bool = False) -> None:
+    ensure_git_available()
+    if dest.exists() and not (dest / ".git").exists():
+        die(f"{dest} already exists but is not a git repo. Move it aside or delete it.")
+    if not dest.exists():
+        info(f"Cloning {repo_url} -> {dest.name}")
+        run_cmd(["git", "clone", repo_url, str(dest)], timeout=600)
+        return
+    if skip_update:
+        info(f"Using existing {dest.name} repo without update (--skip-update).")
+        return
+    info(f"Checking {dest.name} for updates")
+    fetch = run_cmd(["git", "fetch", "--prune", "origin"], cwd=dest, check=False, timeout=300)
+    if fetch.returncode != 0:
+        warn(f"Could not fetch {dest.name}; using local checkout. Details: {fetch.stderr.strip() or fetch.stdout.strip()}")
+        return
+    branch = git_default_branch(dest)
+    local = run_cmd(["git", "rev-parse", "HEAD"], cwd=dest, check=True).stdout.strip()
+    remote_res = run_cmd(["git", "rev-parse", f"origin/{branch}"], cwd=dest, check=False)
+    if remote_res.returncode != 0:
+        warn(f"Could not determine origin/{branch}; leaving {dest.name} as-is.")
+        return
+    remote = remote_res.stdout.strip()
+    if local == remote:
+        info(f"{dest.name} is already at latest origin/{branch} ({local[:8]}).")
+        return
+    # Only fast-forward. Do not destroy local changes.
+    status = run_cmd(["git", "status", "--porcelain"], cwd=dest, check=True).stdout.strip()
+    if status:
+        warn(f"{dest.name} has local changes; fetched latest but did not pull. Commit/stash changes, then rerun.")
+        return
+    info(f"Fast-forwarding {dest.name} from {local[:8]} to {remote[:8]}")
+    run_cmd(["git", "pull", "--ff-only", "origin", branch], cwd=dest, timeout=300)
+
+
+# ----------------------------- wowsimcli setup --------------------------------
+
+
+def current_platform_asset_patterns() -> list[str]:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    is_x64 = machine in {"x86_64", "amd64"}
+    is_arm64 = machine in {"arm64", "aarch64"}
+    if system == "windows":
+        return [r"wowsimcli.*windows.*\.zip$", r"wowsimcli.*\.exe\.zip$"]
+    if system == "linux" and is_x64:
+        return [r"wowsimcli.*amd64.*linux.*\.zip$", r"wowsimcli.*linux.*amd64.*\.zip$"]
+    if system == "linux" and is_arm64:
+        return [r"wowsimcli.*arm64.*linux.*\.zip$", r"wowsimcli.*linux.*arm64.*\.zip$"]
+    if system == "darwin" and is_arm64:
+        return [r"wowsimcli.*arm64.*darwin.*\.zip$", r"wowsimcli.*darwin.*arm64.*\.zip$"]
+    if system == "darwin" and is_x64:
+        return [r"wowsimcli.*amd64.*darwin.*\.zip$", r"wowsimcli.*darwin.*amd64.*\.zip$"]
+    return [r"wowsimcli.*\.zip$"]
+
+
+def find_binary_in_dir(path: Path) -> Path | None:
+    names = ["wowsimcli.exe", "wowsimcli-windows.exe", "wowsimcli", "wowsimcli-amd64-linux", "wowsimcli-arm64-darwin"]
+    for name in names:
+        candidate = path / name
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    for candidate in path.rglob("wowsimcli*"):
+        if candidate.is_file() and not candidate.name.endswith((".zip", ".json", ".txt")):
+            return candidate
+    return None
+
+
+def download_latest_wowsimcli(bin_dir: Path, force: bool = False) -> Path | None:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    marker = bin_dir / "wowsimcli-release.json"
+    try:
+        release = http_json(f"{GITHUB_API}/repos/wowsims/mop/releases/latest")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"Could not query latest wowsimcli release from GitHub API: {exc}")
+        return None
+
+    tag = release.get("tag_name") or release.get("name") or "latest"
+    existing = find_binary_in_dir(bin_dir)
+    if existing and marker.exists() and not force:
+        with contextlib.suppress(Exception):
+            meta = read_json_file(marker)
+            if meta.get("tag_name") == tag:
+                ensure_executable(existing)
+                info(f"Using cached wowsimcli {tag}: {existing}")
+                return existing
+
+    assets = release.get("assets") or []
+    patterns = current_platform_asset_patterns()
+    selected: dict[str, Any] | None = None
+    for pat in patterns:
+        regex = re.compile(pat, re.IGNORECASE)
+        for asset in assets:
+            if regex.search(asset.get("name", "")):
+                selected = asset
+                break
+        if selected:
+            break
+
+    if not selected:
+        warn("No matching wowsimcli release asset found for this platform; will try local Go build.")
+        return None
+
+    asset_url = selected.get("browser_download_url")
+    asset_name = selected.get("name") or "wowsimcli.zip"
+    if not asset_url:
+        warn("Latest release asset did not include a browser_download_url; will try local Go build.")
+        return None
+
+    info(f"Downloading wowsimcli {tag} asset {asset_name}")
+    zip_path = bin_dir / asset_name
+    req = urllib.request.Request(asset_url, headers={"User-Agent": f"wowsims-mop-runner/{SCRIPT_VERSION}"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp, zip_path.open("wb") as out:
+            shutil.copyfileobj(resp, out)
+        # Clean previous extracted cli-ish binaries, but leave marker/cache.
+        for child in bin_dir.iterdir():
+            if child == zip_path or child == marker:
+                continue
+            if child.is_file() and child.name.startswith("wowsimcli"):
+                child.unlink(missing_ok=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(bin_dir)
+    except Exception as exc:  # noqa: BLE001
+        warn(f"Failed downloading/extracting wowsimcli release asset: {exc}")
+        return None
+
+    binary = find_binary_in_dir(bin_dir)
+    if not binary:
+        warn("Downloaded wowsimcli asset, but no executable-looking file was found inside it.")
+        return None
+    ensure_executable(binary)
+    write_json_file(marker, {"tag_name": tag, "asset_name": asset_name, "downloaded_at_utc": utc_stamp()})
+    info(f"Using wowsimcli: {binary}")
+    return binary
+
+
+def build_wowsimcli(mop_dir: Path, bin_dir: Path) -> Path | None:
+    if not shutil.which("go"):
+        warn("Go was not found on PATH; cannot build wowsimcli fallback.")
+        return None
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    exe = "wowsimcli.exe" if os.name == "nt" else "wowsimcli"
+    out = bin_dir / exe
+    info("Building wowsimcli from local mop checkout")
+    commands = [
+        ["go", "build", "-tags=with_db", "-o", str(out), "./cmd/wowsimcli/cli_main.go"],
+        ["go", "build", "-o", str(out), "./cmd/wowsimcli/cli_main.go"],
+    ]
+    last_error = ""
+    for cmd in commands:
+        res = run_cmd(cmd, cwd=mop_dir, check=False, timeout=900)
+        if res.returncode == 0 and out.exists():
+            ensure_executable(out)
+            return out
+        last_error = res.stderr.strip() or res.stdout.strip()
+    warn(f"Could not build wowsimcli. Last error:\n{last_error}")
+    return None
+
+
+def ensure_wowsimcli(paths: RunnerPaths, force_download: bool = False) -> Path:
+    existing = find_binary_in_dir(paths.bin_dir)
+    if existing and not force_download:
+        ensure_executable(existing)
+        return existing
+    downloaded = download_latest_wowsimcli(paths.bin_dir, force=force_download)
+    if downloaded:
+        return downloaded
+    built = build_wowsimcli(paths.mop, paths.bin_dir)
+    if built:
+        return built
+    die(
+        "Could not obtain wowsimcli. Install Go and rerun, or manually download a wowsimcli "
+        "release asset into .wowsims_mop_runner/bin."
+    )
+    raise AssertionError("unreachable")
+
+
+# ----------------------------- Input parsing ---------------------------------
+
+
+def prompt_blob(label: str, allow_blank: bool = False) -> str:
+    print()
+    print(label)
+    print("Paste a one-line string, type @path/to/file.json, or paste multiple lines and finish with a line containing only END.")
+    first = input("> ").rstrip("\n")
+    if not first and allow_blank:
+        return ""
+    if first.strip().upper() == "END":
+        return ""
+    if first.startswith("@") and len(first) > 1:
+        path = Path(first[1:].strip()).expanduser()
+        if not path.exists():
+            die(f"File not found: {path}")
+        return path.read_text(encoding="utf-8")
+    lines = [first]
+    # Heuristic: if the first line is already parseable or a URL, don't block for END.
+    stripped = first.strip()
+    if (stripped.startswith("{") and stripped.endswith("}")) or stripped.startswith("http"):
+        return first
+    while True:
+        line = input()
+        if line.strip().upper() == "END":
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def load_blob_or_path(value: str | None) -> str:
+    if not value:
+        return ""
+    if value.startswith("@"):
+        path = Path(value[1:]).expanduser()
+        return path.read_text(encoding="utf-8")
+    path = Path(value).expanduser()
+    if path.exists() and path.is_file():
+        return path.read_text(encoding="utf-8")
+    return value
+
+
+def maybe_unwrap_json_string(data: Any) -> Any:
+    # Sometimes a pasted export is a JSON string containing JSON.
+    if isinstance(data, str):
+        s = data.strip()
+        if s.startswith("{") or s.startswith("["):
+            with contextlib.suppress(json.JSONDecodeError):
+                return json.loads(s)
+    return data
+
+
+def parse_jsonish(blob: str) -> Any:
+    text = blob.strip().strip("\ufeff")
+    if not text:
+        die("No input was provided.")
+    # Support accidental wrapping in code fences.
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        data = json.loads(text)
+        return maybe_unwrap_json_string(data)
+    except json.JSONDecodeError as exc:
+        # If this looks like SavedVariables assignment, pull the JSON-ish object after '='.
+        if "=" in text and "{" in text:
+            candidate = text[text.find("{") :]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+        die(f"Input is not valid JSON. Parse error: {exc}")
+    raise AssertionError("unreachable")
+
+
+def run_decodelink(wowsimcli: Path, link: str, out_dir: Path) -> Any:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = run_cmd([str(wowsimcli), "decodelink", link], check=False, timeout=120)
+    if result.returncode != 0:
+        die(f"wowsimcli decodelink failed:\n{result.stderr.strip() or result.stdout.strip()}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        # Some builds print extra text; pull the first JSON object.
+        m = re.search(r"(\{.*\})", result.stdout, flags=re.DOTALL)
+        if not m:
+            die(f"wowsimcli decodelink did not return JSON:\n{result.stdout[:1000]}")
+        return json.loads(m.group(1))
+
+
+def classify_payload(data: Any) -> str:
+    if isinstance(data, dict):
+        keys = set(data.keys())
+        if "raid" in keys and ("simOptions" in keys or "sim_options" in keys or "type" in keys):
+            return "raid_request"
+        if "player" in keys and ("settings" in keys or "encounter" in keys):
+            return "individual_settings"
+        if "gear" in keys and "class" in keys and "spec" in keys:
+            return "wse_character"
+        if "items" in keys and isinstance(data.get("items"), list):
+            return "equipment_spec"
+        if "raidSimRequest" in keys:
+            return "raid_request_wrapped"
+        if "individualSimSettings" in keys:
+            return "individual_settings_wrapped"
+    return "unknown"
+
+
+def load_user_payload(blob: str, wowsimcli: Path, out_dir: Path) -> tuple[str, Any]:
+    text = blob.strip()
+    if re.match(r"^https?://", text) and "#" in text:
+        data = run_decodelink(wowsimcli, text, out_dir)
+        kind = classify_payload(data)
+        if kind == "unknown" and "player" in data:
+            kind = "individual_settings"
+        return kind, data
+    data = parse_jsonish(text)
+    kind = classify_payload(data)
+    if kind == "raid_request_wrapped":
+        return "raid_request", data["raidSimRequest"]
+    if kind == "individual_settings_wrapped":
+        return "individual_settings", data["individualSimSettings"]
+    return kind, data
+
+
+# ----------------------------- RaidSimRequest building ------------------------
+
+
+def proto_enum_from_wse_class(value: Any) -> str:
+    s_text = normalize_text(value)
+    s_key = normalize_key(value)
+    return CLASS_ENUM_BY_WSE.get(s_text) or CLASS_ENUM_BY_WSE.get(s_key) or "ClassUnknown"
+
+
+def proto_enum_from_wse_race(value: Any) -> str:
+    s_text = normalize_text(value)
+    s_key = normalize_key(value)
+    return RACE_ENUM_BY_WSE.get(s_text) or RACE_ENUM_BY_WSE.get(s_key) or "RaceUnknown"
+
+
+def spec_field_from_wse(class_name: Any, spec_name: Any) -> str:
+    cls_text = normalize_text(class_name)
+    cls_key = normalize_key(class_name)
+    spec_text = normalize_text(spec_name)
+    spec_key = normalize_key(spec_name)
+    return (
+        SPEC_FIELD_BY_CLASS_AND_SPEC.get((cls_text, spec_text))
+        or SPEC_FIELD_BY_CLASS_AND_SPEC.get((cls_key, spec_text))
+        or SPEC_FIELD_BY_CLASS_AND_SPEC.get((cls_text, spec_key))
+        or SPEC_FIELD_BY_CLASS_AND_SPEC.get((cls_key, spec_key))
+        or SPEC_ONEOF_FIELD_BY_WSE.get(spec_text)
+        or SPEC_ONEOF_FIELD_BY_WSE.get(spec_key)
+        or ""
+    )
+
+
+def normalize_item_spec(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    out: dict[str, Any] = {}
+    # Keep proto snake_case names; protojson accepts them and they match WSE.
+    for src, dst in (
+        ("id", "id"),
+        ("itemId", "id"),
+        ("item_id", "id"),
+        ("randomSuffix", "random_suffix"),
+        ("random_suffix", "random_suffix"),
+        ("enchant", "enchant"),
+        ("gems", "gems"),
+        ("reforging", "reforging"),
+        ("reforge", "reforging"),
+        ("upgradeStep", "upgrade_step"),
+        ("upgrade_step", "upgrade_step"),
+        ("challengeMode", "challenge_mode"),
+        ("challenge_mode", "challenge_mode"),
+        ("tinker", "tinker"),
+    ):
+        if src in item and item[src] not in (None, ""):
+            out[dst] = item[src]
+    if "gems" in out and isinstance(out["gems"], list):
+        out["gems"] = [int(g or 0) for g in out["gems"]]
+    for key in ("id", "random_suffix", "enchant", "reforging", "upgrade_step", "tinker"):
+        if key in out and out[key] is not None:
+            with contextlib.suppress(ValueError, TypeError):
+                out[key] = int(out[key])
+    return out
+
+
+def normalize_equipment_spec(equipment: Any) -> dict[str, Any]:
+    if not isinstance(equipment, dict):
+        return {"items": []}
+    items = equipment.get("items") or []
+    if not isinstance(items, list):
+        return {"items": []}
+    return {"items": [normalize_item_spec(item) if item else {} for item in items]}
+
+
+def normalize_wse_glyphs(glyphs: Any) -> dict[str, int]:
+    if not isinstance(glyphs, dict):
+        return {}
+    out: dict[str, int] = {}
+
+    def glyph_id(entry: Any) -> int | None:
+        if isinstance(entry, dict):
+            value = entry.get("spellID", entry.get("spellId", entry.get("spell_id")))
+        else:
+            value = entry
+        with contextlib.suppress(TypeError, ValueError):
+            return int(value)
+        return None
+
+    majors = [glyph_id(x) for x in glyphs.get("major", []) if glyph_id(x)]
+    minors = [glyph_id(x) for x in glyphs.get("minor", []) if glyph_id(x)]
+    for i, value in enumerate(majors[:3], 1):
+        out[f"major{i}"] = value
+    for i, value in enumerate(minors[:3], 1):
+        out[f"minor{i}"] = value
+    return out
+
+
+def professions_from_wse(professions: Any) -> tuple[str, str]:
+    if not isinstance(professions, list):
+        return "ProfessionUnknown", "ProfessionUnknown"
+    vals: list[str] = []
+    for prof in professions:
+        name = prof.get("name") if isinstance(prof, dict) else prof
+        enum = PROFESSION_ENUM_BY_NAME.get(normalize_text(name)) or PROFESSION_ENUM_BY_NAME.get(normalize_key(name))
+        if enum:
+            vals.append(enum)
+    vals = vals[:2]
+    while len(vals) < 2:
+        vals.append("ProfessionUnknown")
+    return vals[0], vals[1]
+
+
+def find_first_player_node(obj: Any) -> dict[str, Any] | None:
+    if isinstance(obj, dict):
+        if "equipment" in obj or "gear" in obj:
+            # Avoid matching UIItem/item nodes: player also usually has race/class/spec-ish fields.
+            if any(k in obj for k in ("race", "class", "talentsString", "talents_string", "glyphs", "rotation")):
+                return obj
+        for value in obj.values():
+            found = find_first_player_node(value)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = find_first_player_node(value)
+            if found is not None:
+                return found
+    return None
+
+
+def get_request_player(request: dict[str, Any]) -> dict[str, Any]:
+    found = find_first_player_node(request)
+    if found is None:
+        die("Could not find a Player node in the RaidSimRequest.")
+    return found
+
+
+def convert_individual_settings_to_raid_request(settings: dict[str, Any], iterations: int | None = None) -> dict[str, Any]:
+    player = copy.deepcopy(settings.get("player") or {})
+    if not player:
+        die("IndividualSimSettings did not contain a player field.")
+    sim_settings = settings.get("settings") or {}
+    sim_options = {"iterations": int(iterations or sim_settings.get("iterations") or 10000)}
+    raid: dict[str, Any] = {
+        "parties": [
+            {
+                "players": [player],
+                "buffs": copy.deepcopy(settings.get("partyBuffs") or settings.get("party_buffs") or {}),
+            }
+        ],
+        "num_active_parties": 1,
+        "buffs": copy.deepcopy(settings.get("raidBuffs") or settings.get("raid_buffs") or {}),
+        "debuffs": copy.deepcopy(settings.get("debuffs") or {}),
+        "tanks": copy.deepcopy(settings.get("tanks") or []),
+    }
+    target_dummies = int(settings.get("targetDummies") or settings.get("target_dummies") or 0)
+    if target_dummies:
+        raid["target_dummies"] = target_dummies
+    return {
+        "request_id": f"wse-runner-{utc_stamp()}",
+        "raid": raid,
+        "encounter": copy.deepcopy(settings.get("encounter") or default_encounter()),
+        "sim_options": sim_options,
+        "type": "SimTypeIndividual",
+    }
+
+
+def default_encounter() -> dict[str, Any]:
+    # A minimal fallback; a UI/template-derived encounter is strongly preferred.
+    return {
+        "api_version": 9,
+        "duration": 300,
+        "duration_variation": 0,
+        "execute_proportion_20": 0.2,
+        "targets": [
+            {
+                "id": 0,
+                "name": "Target Dummy",
+                "level": 93,
+                "mob_type": "MobTypeHumanoid",
+            }
+        ],
+    }
+
+
+def minimal_request_from_wse_character(character: dict[str, Any], iterations: int) -> dict[str, Any]:
+    class_enum = proto_enum_from_wse_class(character.get("class"))
+    race_enum = proto_enum_from_wse_race(character.get("race"))
+    spec_field = spec_field_from_wse(character.get("class"), character.get("spec"))
+    profession1, profession2 = professions_from_wse(character.get("professions"))
+    player: dict[str, Any] = {
+        "name": str(character.get("name") or "WSE Character"),
+        "race": race_enum,
+        "class": class_enum,
+        "equipment": normalize_equipment_spec(character.get("gear")),
+        "talents_string": str(character.get("talents") or ""),
+        "glyphs": normalize_wse_glyphs(character.get("glyphs")),
+        "profession1": profession1,
+        "profession2": profession2,
+    }
+    if spec_field:
+        player[spec_field] = {}
+    else:
+        warn("Could not map WSE spec to a WoWSims player oneof field; a template/share link may be required.")
+    return {
+        "request_id": f"wse-runner-{utc_stamp()}",
+        "raid": {"parties": [{"players": [player]}], "num_active_parties": 1},
+        "encounter": default_encounter(),
+        "sim_options": {"iterations": iterations},
+        "type": "SimTypeIndividual",
+    }
+
+
+def inject_wse_character_into_request(request: dict[str, Any], character: dict[str, Any], iterations: int | None = None) -> dict[str, Any]:
+    req = copy.deepcopy(request)
+    player = get_request_player(req)
+    player["equipment"] = normalize_equipment_spec(character.get("gear"))
+    player.pop("gear", None)
+    if character.get("talents"):
+        player["talents_string"] = str(character.get("talents"))
+        player.pop("talentsString", None)
+    glyphs = normalize_wse_glyphs(character.get("glyphs"))
+    if glyphs:
+        player["glyphs"] = glyphs
+    class_enum = proto_enum_from_wse_class(character.get("class"))
+    race_enum = proto_enum_from_wse_race(character.get("race"))
+    if class_enum != "ClassUnknown":
+        player["class"] = class_enum
+    if race_enum != "RaceUnknown":
+        player["race"] = race_enum
+    profession1, profession2 = professions_from_wse(character.get("professions"))
+    if profession1 != "ProfessionUnknown":
+        player["profession1"] = profession1
+    if profession2 != "ProfessionUnknown":
+        player["profession2"] = profession2
+    if iterations:
+        sim_options = req.setdefault("sim_options", req.setdefault("simOptions", {}))
+        sim_options["iterations"] = int(iterations)
+    return req
+
+
+def build_request_from_payload(
+    kind: str,
+    payload: Any,
+    wowsimcli: Path,
+    out_dir: Path,
+    iterations: int,
+    template_blob: str = "",
+) -> dict[str, Any]:
+    if kind == "raid_request":
+        req = copy.deepcopy(payload)
+        set_iterations(req, iterations)
+        return req
+    if kind == "individual_settings":
+        return convert_individual_settings_to_raid_request(payload, iterations=iterations)
+    if kind != "wse_character":
+        die(f"Cannot build a RaidSimRequest from payload kind {kind!r}.")
+
+    template_blob = template_blob.strip()
+    if template_blob:
+        t_kind, t_payload = load_user_payload(template_blob, wowsimcli, out_dir)
+        if t_kind == "individual_settings":
+            base = convert_individual_settings_to_raid_request(t_payload, iterations=iterations)
+        elif t_kind == "raid_request":
+            base = copy.deepcopy(t_payload)
+            set_iterations(base, iterations)
+        else:
+            die(f"Template/share-link input must decode to IndividualSimSettings or RaidSimRequest, got {t_kind!r}.")
+        return inject_wse_character_into_request(base, payload, iterations=iterations)
+
+    warn(
+        "No WoWSims template/share link was provided. Building a minimal request from WSE only. "
+        "This may be rejected by the sim or may not match your normal buffs/APL/encounter."
+    )
+    return minimal_request_from_wse_character(payload, iterations)
+
+
+def set_iterations(request: dict[str, Any], iterations: int | None) -> None:
+    if not iterations:
+        return
+    sim_options = request.get("sim_options") or request.get("simOptions")
+    if not isinstance(sim_options, dict):
+        sim_options = {}
+        request["sim_options"] = sim_options
+    sim_options["iterations"] = int(iterations)
+
+
+def request_equipment_items(request: dict[str, Any]) -> list[dict[str, Any]]:
+    player = get_request_player(request)
+    equipment = player.get("equipment") or player.get("gear")
+    if not isinstance(equipment, dict):
+        die("Player did not have an equipment/gear object.")
+    items = equipment.setdefault("items", [])
+    if not isinstance(items, list):
+        die("Player equipment.items was not a list.")
+    return items
+
+
+# ----------------------------- Item metadata ---------------------------------
+
+
+def load_item_index(mop_dir: Path, cache_dir: Path, refresh: bool = False) -> dict[int, ItemMeta]:
+    cache_path = cache_dir / "item_index.json"
+    if cache_path.exists() and not refresh:
+        with contextlib.suppress(Exception):
+            raw = read_json_file(cache_path)
+            return {int(k): ItemMeta(**v) for k, v in raw.items()}
+    info("Scanning local WoWSims repo for item metadata")
+    index: dict[int, ItemMeta] = {}
+    # 1) Prefer real JSON/protojson-ish DB assets if present.
+    likely_roots = [
+        mop_dir / "assets",
+        mop_dir / "ui" / "assets",
+        mop_dir / "ui" / "core" / "assets",
+        mop_dir / "ui" / "core" / "proto",
+        mop_dir / "sim" / "core",
+        mop_dir / "sim" / "common",
+    ]
+    files: list[Path] = []
+    for root in likely_roots:
+        if root.exists():
+            for suffix in ("*.json", "*.protojson", "*.ts", "*.go"):
+                files.extend(p for p in root.rglob(suffix) if p.is_file() and p.stat().st_size < 25_000_000)
+    seen: set[Path] = set()
+    for path in files:
+        if path in seen:
+            continue
+        seen.add(path)
+        with contextlib.suppress(Exception):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if path.suffix in {".json", ".protojson"}:
+                parse_json_item_file(text, index)
+            else:
+                parse_code_item_file(text, index)
+    if index:
+        write_json_file(cache_path, {str(k): dataclasses.asdict(v) for k, v in index.items()})
+    info(f"Loaded metadata for {len(index):,} items from local WoWSims files")
+    return index
+
+
+def parse_json_item_file(text: str, index: dict[int, ItemMeta]) -> None:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return
+
+    zones = {}
+    npcs = {}
+    if isinstance(data, dict):
+        for z in data.get("zones", []) or []:
+            if isinstance(z, dict) and "id" in z:
+                zones[int(z["id"])] = z.get("name", "")
+        for npc in data.get("npcs", []) or []:
+            if isinstance(npc, dict) and "id" in npc:
+                npcs[int(npc["id"])] = npc.get("name", "")
+
+    candidates: list[Any] = []
+    if isinstance(data, dict):
+        for key in ("items", "Items"):
+            if isinstance(data.get(key), list):
+                candidates.extend(data[key])
+    elif isinstance(data, list):
+        candidates = data
+    for item in candidates:
+        if not isinstance(item, dict) or "id" not in item:
+            continue
+        with contextlib.suppress(Exception):
+            item_id = int(item["id"])
+            meta = item_meta_from_dict(item, zones=zones, npcs=npcs)
+            if item_id and (item_id not in index or richer_meta(meta, index[item_id])):
+                index[item_id] = meta
+
+
+def item_meta_from_dict(item: dict[str, Any], zones: Mapping[int, str] | None = None, npcs: Mapping[int, str] | None = None) -> ItemMeta:
+    zones = zones or {}
+    npcs = npcs or {}
+    item_id = int(item.get("id") or item.get("itemId") or 0)
+    sources = item.get("sources") or item.get("Sources") or []
+    # Add resolved display fields for local source formatting.
+    if isinstance(sources, list):
+        for src in sources:
+            if not isinstance(src, dict):
+                continue
+            for key in ("drop", "Drop", "soldBy", "sold_by", "SoldBy"):
+                node = src.get(key)
+                if isinstance(node, dict):
+                    if node.get("npc_id") or node.get("npcId"):
+                        npc_id = int(node.get("npc_id") or node.get("npcId"))
+                        node.setdefault("npc_name", npcs.get(npc_id, ""))
+                    if node.get("zone_id") or node.get("zoneId"):
+                        zone_id = int(node.get("zone_id") or node.get("zoneId"))
+                        node.setdefault("zone_name", zones.get(zone_id, ""))
+    return ItemMeta(
+        id=item_id,
+        name=str(item.get("name") or item.get("Name") or item.get("name_enus") or ""),
+        type=str(item.get("type") or item.get("itemType") or item.get("item_type") or ""),
+        armor_type=str(item.get("armorType") or item.get("armor_type") or item.get("armorTypeName") or ""),
+        weapon_type=str(item.get("weaponType") or item.get("weapon_type") or item.get("weaponTypeName") or ""),
+        hand_type=str(item.get("handType") or item.get("hand_type") or item.get("handTypeName") or ""),
+        ilvl=int(item["ilvl"]) if str(item.get("ilvl", "")).isdigit() else None,
+        quality=str(item.get("quality") or ""),
+        phase=int(item["phase"]) if str(item.get("phase", "")).isdigit() else None,
+        class_allowlist=[str(x) for x in item.get("classAllowlist", item.get("class_allowlist", [])) or []],
+        required_profession=str(item.get("requiredProfession") or item.get("required_profession") or ""),
+        sources=sources if isinstance(sources, list) else [],
+        raw=item,
+    )
+
+
+def parse_code_item_file(text: str, index: dict[int, ItemMeta]) -> None:
+    # Heuristic parser for TS/Go generated item objects. It is intentionally permissive.
+    if "UIItem" not in text and "ItemType" not in text and "ItemsByID" not in text and "Name:" not in text:
+        return
+    # Split around id markers to keep regex bounded.
+    for m in re.finditer(r"(?:\bid\s*[:=]|\bID\s*:)\s*(\d{3,7})", text):
+        item_id = int(m.group(1))
+        start = max(0, m.start() - 500)
+        end = min(len(text), m.end() + 2500)
+        chunk = text[start:end]
+        name = regex_first(chunk, [r"\bname\s*[:=]\s*[\"']([^\"']+)", r"\bName\s*:\s*[\"']([^\"']+)"])
+        itype = regex_first(chunk, [r"ItemType\.([A-Za-z0-9_]+)", r"\btype\s*[:=]\s*[\"']?([A-Za-z0-9_]+)"])
+        armor = regex_first(chunk, [r"ArmorType\.([A-Za-z0-9_]+)", r"\barmor[_A-Za-z]*\s*[:=]\s*[\"']?([A-Za-z0-9_]+)"])
+        weapon = regex_first(chunk, [r"WeaponType\.([A-Za-z0-9_]+)", r"\bweapon[_A-Za-z]*\s*[:=]\s*[\"']?([A-Za-z0-9_]+)"])
+        hand = regex_first(chunk, [r"HandType\.([A-Za-z0-9_]+)", r"\bhand[_A-Za-z]*\s*[:=]\s*[\"']?([A-Za-z0-9_]+)"])
+        ilvl_s = regex_first(chunk, [r"\bilvl\s*[:=]\s*(\d+)", r"\bIlvl\s*:\s*(\d+)"])
+        phase_s = regex_first(chunk, [r"\bphase\s*[:=]\s*(\d+)", r"\bPhase\s*:\s*(\d+)"])
+        if itype and not itype.startswith("ItemType"):
+            itype = f"ItemType{itype}" if itype[0].isupper() else itype
+        if armor and not armor.startswith("ArmorType") and armor[0].isupper():
+            armor = f"ArmorType{armor}"
+        if weapon and not weapon.startswith("WeaponType") and weapon[0].isupper():
+            weapon = f"WeaponType{weapon}"
+        if hand and not hand.startswith("HandType") and hand[0].isupper():
+            hand = f"HandType{hand}"
+        meta = ItemMeta(
+            id=item_id,
+            name=html.unescape(name),
+            type=itype,
+            armor_type=armor,
+            weapon_type=weapon,
+            hand_type=hand,
+            ilvl=int(ilvl_s) if ilvl_s else None,
+            phase=int(phase_s) if phase_s else None,
+        )
+        if item_id not in index or richer_meta(meta, index[item_id]):
+            index[item_id] = meta
+
+
+def regex_first(text: str, patterns: Sequence[str]) -> str:
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def richer_meta(candidate: ItemMeta, existing: ItemMeta) -> bool:
+    score_candidate = sum(bool(getattr(candidate, f)) for f in ("name", "type", "armor_type", "weapon_type", "hand_type", "ilvl")) + len(candidate.sources)
+    score_existing = sum(bool(getattr(existing, f)) for f in ("name", "type", "armor_type", "weapon_type", "hand_type", "ilvl")) + len(existing.sources)
+    return score_candidate > score_existing
+
+
+def item_name(item_id: int, item_index: Mapping[int, ItemMeta]) -> str:
+    meta = item_index.get(item_id)
+    return meta.name if meta and meta.name else f"Item {item_id}"
+
+
+def slot_indexes_for_item(meta: ItemMeta | None, item_spec: Mapping[str, Any] | None = None) -> list[int]:
+    if meta:
+        keys = [meta.type, normalize_text(meta.type), normalize_key(meta.type)]
+        for key in keys:
+            if key in ITEM_TYPE_TO_SLOT_INDEXES:
+                return ITEM_TYPE_TO_SLOT_INDEXES[key]
+            # Handle enum names that were parsed without prefix.
+            prefixed = f"ItemType{key[:1].upper()}{key[1:]}" if key else ""
+            if prefixed in ITEM_TYPE_TO_SLOT_INDEXES:
+                return ITEM_TYPE_TO_SLOT_INDEXES[prefixed]
+        if meta.weapon_type:
+            return [14, 15]
+    if item_spec:
+        for key in ("slot", "itemSlot", "item_slot", "equipSlot", "equip_slot"):
+            value = item_spec.get(key)
+            if value:
+                text = str(value)
+                if text in SLOT_TO_INDEXES:
+                    return SLOT_TO_INDEXES[text]
+                norm = normalize_key(text)
+                for slot, idxs in SLOT_TO_INDEXES.items():
+                    if normalize_key(slot).endswith(norm) or norm.endswith(normalize_key(slot)):
+                        return idxs
+    return []
+
+
+def source_text_for_item(item_id: int, item_index: Mapping[int, ItemMeta], cache_dir: Path, no_wowhead: bool = False) -> str:
+    meta = item_index.get(item_id)
+    if meta and meta.sources:
+        local = format_sources(meta.sources)
+        if local:
+            return local
+    if no_wowhead:
+        return "Source not available in local WoWSims DB"
+    return wowhead_source_lookup(item_id, cache_dir)
+
+
+def format_sources(sources: Sequence[Mapping[str, Any]]) -> str:
+    chunks: list[str] = []
+    for src in sources:
+        if not isinstance(src, Mapping):
+            continue
+        crafted = first_mapping(src, "crafted", "Crafted")
+        if crafted is not None:
+            prof = crafted.get("profession") or crafted.get("Profession") or "Crafting"
+            spell = crafted.get("spell_id") or crafted.get("spellId") or crafted.get("spellID")
+            chunks.append(f"Crafted: {prof}" + (f" (spell {spell})" if spell else ""))
+            continue
+        drop = first_mapping(src, "drop", "Drop")
+        if drop is not None:
+            npc = drop.get("npc_name") or drop.get("npcName") or drop.get("other_name") or drop.get("otherName") or drop.get("npc_id") or drop.get("npcId") or "drop source"
+            zone = drop.get("zone_name") or drop.get("zoneName") or drop.get("zone_id") or drop.get("zoneId") or ""
+            diff = SOURCE_DIFFICULTY_NAMES.get(drop.get("difficulty"), drop.get("difficulty", ""))
+            category = drop.get("category") or ""
+            text = f"Drop: {npc}"
+            if zone:
+                text += f" in {zone}"
+            extras = ", ".join(str(x) for x in (diff, category) if x)
+            if extras:
+                text += f" ({extras})"
+            chunks.append(text)
+            continue
+        quest = first_mapping(src, "quest", "Quest")
+        if quest is not None:
+            chunks.append(f"Quest: {quest.get('name') or quest.get('id') or 'quest reward'}")
+            continue
+        sold = first_mapping(src, "soldBy", "sold_by", "soldBy", "SoldBy")
+        if sold is not None:
+            npc = sold.get("npc_name") or sold.get("npcName") or sold.get("npc_id") or sold.get("npcId") or "vendor"
+            zone = sold.get("zone_name") or sold.get("zoneName") or sold.get("zone_id") or sold.get("zoneId") or ""
+            chunks.append(f"Sold by: {npc}" + (f" in {zone}" if zone else ""))
+            continue
+        rep = first_mapping(src, "rep", "Rep")
+        if rep is not None:
+            faction = rep.get("rep_faction_id") or rep.get("repFactionId") or rep.get("repFactionID") or "reputation"
+            level = rep.get("rep_level") or rep.get("repLevel") or ""
+            chunks.append(f"Reputation: {faction}" + (f" at {level}" if level else ""))
+            continue
+    # Keep output readable.
+    seen: list[str] = []
+    for chunk in chunks:
+        if chunk not in seen:
+            seen.append(chunk)
+    return "; ".join(seen[:5])
+
+
+def first_mapping(src: Mapping[str, Any], *keys: str) -> Mapping[str, Any] | None:
+    for key in keys:
+        value = src.get(key)
+        if isinstance(value, Mapping):
+            return value
+    return None
+
+
+def wowhead_source_lookup(item_id: int, cache_dir: Path) -> str:
+    cache_path = cache_dir / "wowhead_sources.json"
+    cache: dict[str, Any] = {}
+    if cache_path.exists():
+        with contextlib.suppress(Exception):
+            cache = read_json_file(cache_path)
+    key = str(item_id)
+    if key in cache:
+        return str(cache[key])
+    url = WOWHEAD_MOP_CLASSIC_ITEM_URL.format(item_id=item_id)
+    try:
+        page = http_text(url, timeout=30)
+        title = html.unescape(regex_first(page, [r"<title>(.*?)</title>"]))
+        title = re.sub(r"\s+-\s+Item\s+-.*$", "", title).strip()
+        source = extract_wowhead_source(page)
+        if source:
+            value = source
+        elif title:
+            value = f"Wowhead MoP Classic: {title} ({url})"
+        else:
+            value = f"Wowhead MoP Classic item page ({url})"
+    except urllib.error.HTTPError as exc:
+        value = f"Wowhead lookup failed: HTTP {exc.code} ({url})"
+    except Exception as exc:  # noqa: BLE001
+        value = f"Wowhead lookup failed: {exc} ({url})"
+    cache[key] = value
+    with contextlib.suppress(Exception):
+        write_json_file(cache_path, cache)
+    # Be polite if many source fallbacks are needed.
+    time.sleep(0.15)
+    return value
+
+
+def extract_wowhead_source(page: str) -> str:
+    text = html.unescape(page)
+    # Best effort against Wowhead's generated JS/listview markup.
+    labels = [
+        ("Dropped by", r"id:\s*['\"]dropped-by['\"].{0,12000}"),
+        ("Contained in", r"id:\s*['\"]contained-in-item['\"].{0,12000}"),
+        ("Sold by", r"id:\s*['\"]sold-by['\"].{0,12000}"),
+        ("Created by", r"id:\s*['\"]created-by['\"].{0,12000}"),
+        ("Reward from", r"id:\s*['\"]reward-from-quest['\"].{0,12000}"),
+    ]
+    for label, pattern in labels:
+        m = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        chunk = m.group(0)
+        names = []
+        for name_pat in (r"name_enus:\s*['\"]([^'\"]+)", r"name:\s*['\"]([^'\"]+)", r"\"name\":\s*\"([^\"]+)\""):
+            for name in re.findall(name_pat, chunk, flags=re.IGNORECASE):
+                clean = re.sub(r"<.*?>", "", html.unescape(name)).strip()
+                if clean and clean not in names:
+                    names.append(clean)
+                if len(names) >= 5:
+                    break
+            if names:
+                break
+        if names:
+            return f"{label}: " + ", ".join(names[:5])
+    return ""
+
+
+# ----------------------------- Usability / candidates -------------------------
+
+
+def is_item_usable(meta: ItemMeta | None, class_enum: str, professions: set[str]) -> tuple[bool, str]:
+    if meta is None:
+        return False, "missing item metadata; cannot prove item is usable"
+    if meta.class_allowlist:
+        allow = {str(x) for x in meta.class_allowlist}
+        if class_enum not in allow and str(class_enum).replace("Class", "") not in allow:
+            return False, f"class restricted ({', '.join(meta.class_allowlist)})"
+    if meta.required_profession:
+        req = str(meta.required_profession)
+        if req not in {"ProfessionUnknown", "0", ""} and req not in professions:
+            return False, f"requires profession {req}"
+    # Armor restriction only for armor slots, not cloak/neck/rings/trinkets/weapons.
+    if meta.armor_type and meta.type in {"ItemTypeHead", "ItemTypeShoulder", "ItemTypeChest", "ItemTypeWrist", "ItemTypeHands", "ItemTypeWaist", "ItemTypeLegs", "ItemTypeFeet"}:
+        max_armor = CLASS_ARMOR_MAX.get(class_enum)
+        if max_armor and meta.armor_type in ARMOR_ORDER:
+            if ARMOR_ORDER.index(meta.armor_type) > ARMOR_ORDER.index(max_armor):
+                return False, f"armor type {meta.armor_type} is above class max {max_armor}"
+    if meta.type == "ItemTypeWeapon" and meta.weapon_type:
+        allowed = CLASS_WEAPONS.get(class_enum)
+        if allowed and meta.weapon_type not in allowed:
+            return False, f"weapon type {meta.weapon_type} not usable by {class_enum}"
+    return True, ""
+
+
+def player_class_and_professions(request: dict[str, Any]) -> tuple[str, set[str]]:
+    player = get_request_player(request)
+    class_enum = str(player.get("class") or player.get("class_") or "ClassUnknown")
+    professions = {str(player.get("profession1") or ""), str(player.get("profession2") or "")}
+    return class_enum, professions
+
+
+def extract_equipment_items_from_payload(kind: str, payload: Any) -> list[dict[str, Any]]:
+    if kind == "equipment_spec":
+        return normalize_equipment_spec(payload)["items"]
+    if kind == "wse_character":
+        return normalize_equipment_spec(payload.get("gear"))["items"]
+    if kind in {"raid_request", "individual_settings"}:
+        req = payload if kind == "raid_request" else convert_individual_settings_to_raid_request(payload)
+        return [normalize_item_spec(x) for x in request_equipment_items(req)]
+    return []
+
+
+def prompt_bag_payload(args: argparse.Namespace, wowsimcli: Path, out_dir: Path) -> tuple[str, Any] | tuple[str, None]:
+    blob = load_blob_or_path(args.bag_export) if args.bag_export else ""
+    if not blob and not args.no_prompt:
+        blob = prompt_blob(
+            "For batch/upgrade mode, paste the WSE bag-items export from the addon UI, or press Enter to skip bag candidates.",
+            allow_blank=True,
+        )
+    if not blob.strip():
+        return "none", None
+    return load_user_payload(blob, wowsimcli, out_dir)
+
+
+def build_candidate_specs(
+    request: dict[str, Any],
+    bag_kind: str,
+    bag_payload: Any,
+    item_index: Mapping[int, ItemMeta],
+    source_mode: str,
+    max_db_candidates: int,
+    min_ilvl: int | None,
+    max_ilvl: int | None,
+) -> list[dict[str, Any]]:
+    equipped_ids = {int(item.get("id")) for item in request_equipment_items(request) if isinstance(item, dict) and item.get("id")}
+    class_enum, professions = player_class_and_professions(request)
+    candidates: dict[int, dict[str, Any]] = {}
+
+    if source_mode in {"bag", "both"} and bag_payload is not None:
+        for spec in extract_equipment_items_from_payload(bag_kind, bag_payload):
+            item_id = int(spec.get("id") or 0)
+            if not item_id or item_id in equipped_ids:
+                continue
+            candidates[item_id] = spec
+
+    if source_mode in {"db", "both"}:
+        db_items: list[tuple[int, ItemMeta]] = list(item_index.items())
+        # Prefer higher-quality/high-ilvl items, but keep deterministic ordering.
+        db_items.sort(key=lambda kv: ((kv[1].ilvl or 0), kv[1].id), reverse=True)
+        added = 0
+        for item_id, meta in db_items:
+            if item_id in equipped_ids or item_id in candidates:
+                continue
+            if min_ilvl is not None and meta.ilvl is not None and meta.ilvl < min_ilvl:
+                continue
+            if max_ilvl is not None and meta.ilvl is not None and meta.ilvl > max_ilvl:
+                continue
+            ok, _reason = is_item_usable(meta, class_enum, professions)
+            if not ok:
+                continue
+            if not slot_indexes_for_item(meta):
+                continue
+            candidates[item_id] = {"id": item_id}
+            added += 1
+            if max_db_candidates and added >= max_db_candidates:
+                break
+
+    usable: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for item_id, spec in candidates.items():
+        meta = item_index.get(item_id)
+        slots = slot_indexes_for_item(meta, spec)
+        if not slots:
+            skipped.append(f"{item_id}: no recognized equip slot")
+            continue
+        ok, reason = is_item_usable(meta, class_enum, professions)
+        if not ok:
+            skipped.append(f"{item_id}: {reason}")
+            continue
+        usable.append(normalize_item_spec(spec))
+    if skipped:
+        info(f"Skipped {len(skipped)} candidate items that were not safely usable/mappable. First few: {'; '.join(skipped[:5])}")
+    return usable
+
+
+def replacement_requests_for_item(base_request: dict[str, Any], item_spec: dict[str, Any], item_index: Mapping[int, ItemMeta]) -> list[tuple[str, dict[str, Any], int, str]]:
+    item_id = int(item_spec.get("id") or 0)
+    meta = item_index.get(item_id)
+    indexes = slot_indexes_for_item(meta, item_spec)
+    if not indexes:
+        return []
+    out: list[tuple[str, dict[str, Any], int, str]] = []
+    for idx in indexes:
+        if idx == 16:
+            continue  # MoP proto does not enumerate a ranged slot.
+        req = copy.deepcopy(base_request)
+        items = request_equipment_items(req)
+        while len(items) <= idx:
+            items.append({})
+        items[idx] = normalize_item_spec(item_spec)
+        # Two-handed weapons should clear offhand for the single-swap trial.
+        if idx == 14 and meta and meta.hand_type == "HandTypeTwoHand" and len(items) > 15:
+            items[15] = {}
+        slot = GEAR_INDEX_TO_SLOT.get(idx, f"slot{idx}")
+        label = f"{item_name(item_id, item_index)}@{slot}"
+        out.append((label, req, idx, slot))
+    return out
+
+
+def combination_requests(
+    base_request: dict[str, Any],
+    candidates: Sequence[dict[str, Any]],
+    item_index: Mapping[int, ItemMeta],
+    max_combinations: int,
+) -> list[tuple[str, dict[str, Any], tuple[int, ...]]]:
+    # Choices per slot: None/current or one of the candidates for that slot.
+    by_slot: dict[int, list[dict[str, Any]]] = {idx: [] for idx in range(16)}
+    for spec in candidates:
+        meta = item_index.get(int(spec.get("id") or 0))
+        for idx in slot_indexes_for_item(meta, spec):
+            if 0 <= idx <= 15:
+                by_slot[idx].append(spec)
+    slots = [idx for idx, specs in by_slot.items() if specs]
+    choices = [[None] + by_slot[idx] for idx in slots]
+    total = math.prod(len(x) for x in choices) if choices else 0
+    if total == 0:
+        return []
+    if max_combinations and total > max_combinations:
+        warn(f"Batch combinations would create {total:,} sims; capping to first {max_combinations:,}. Use --max-batch-combinations 0 for no cap.")
+    out: list[tuple[str, dict[str, Any], tuple[int, ...]]] = []
+    for combo_num, combo in enumerate(itertools.product(*choices), 1):
+        if max_combinations and combo_num > max_combinations:
+            break
+        if all(x is None for x in combo):
+            continue
+        req = copy.deepcopy(base_request)
+        items = request_equipment_items(req)
+        labels: list[str] = []
+        used_ids: list[int] = []
+        for idx, spec in zip(slots, combo):
+            if spec is None:
+                continue
+            while len(items) <= idx:
+                items.append({})
+            normalized = normalize_item_spec(spec)
+            items[idx] = normalized
+            item_id = int(normalized.get("id") or 0)
+            used_ids.append(item_id)
+            labels.append(f"{item_name(item_id, item_index)}@{GEAR_INDEX_TO_SLOT.get(idx, idx)}")
+        label = "; ".join(labels)
+        out.append((label, req, tuple(used_ids)))
+    return out
+
+
+# ----------------------------- Sim execution ---------------------------------
+
+
+def extract_dps(result: Any) -> float | None:
+    if not isinstance(result, dict):
+        return None
+    for raid_key in ("raidMetrics", "raid_metrics"):
+        raid = result.get(raid_key)
+        if isinstance(raid, dict):
+            dps = distribution_avg(raid.get("dps"))
+            if dps is not None:
+                return dps
+            for party_key in ("parties",):
+                parties = raid.get(party_key)
+                if isinstance(parties, list) and parties:
+                    pdps = distribution_avg(parties[0].get("dps")) if isinstance(parties[0], dict) else None
+                    if pdps is not None:
+                        return pdps
+    # Fallback: recursively find first dps.avg.
+    return recursive_find_dps(result)
+
+
+def distribution_avg(value: Any) -> float | None:
+    if isinstance(value, dict):
+        avg = value.get("avg")
+        if isinstance(avg, (int, float)):
+            return float(avg)
+    return None
+
+
+def recursive_find_dps(obj: Any) -> float | None:
+    if isinstance(obj, dict):
+        if "dps" in obj:
+            avg = distribution_avg(obj["dps"])
+            if avg is not None:
+                return avg
+        for value in obj.values():
+            found = recursive_find_dps(value)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = recursive_find_dps(value)
+            if found is not None:
+                return found
+    return None
+
+
+def run_single_sim(wowsimcli: Path, request: dict[str, Any], run_dir: Path, label: str, timeout: int, verbose: bool = False) -> SimRunResult:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    safe = safe_filename(label)
+    request_path = run_dir / f"{safe}.request.json"
+    result_path = run_dir / f"{safe}.result.json"
+    write_json_file(request_path, request)
+    start = time.perf_counter()
+    cmd = [str(wowsimcli), "sim", "--infile", str(request_path), "--outfile", str(result_path)]
+    if verbose:
+        cmd.append("--verbose")
+    proc = run_cmd(cmd, check=False, timeout=timeout)
+    seconds = time.perf_counter() - start
+    if proc.returncode != 0:
+        err = proc.stderr.strip() or proc.stdout.strip() or f"wowsimcli exited {proc.returncode}"
+        return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error=err, seconds=seconds)
+    try:
+        result = read_json_file(result_path)
+    except Exception as exc:  # noqa: BLE001
+        return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error=f"Could not parse result JSON: {exc}", seconds=seconds)
+    if isinstance(result, dict):
+        err = result.get("error") or result.get("Error")
+        if isinstance(err, dict) and err.get("message"):
+            return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error=str(err.get("message")), seconds=seconds)
+    dps = extract_dps(result)
+    if dps is None:
+        return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error="Result did not contain a DPS average", seconds=seconds)
+    return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=dps, seconds=seconds)
+
+
+def run_many_sims(
+    wowsimcli: Path,
+    jobs: Sequence[tuple[str, dict[str, Any], dict[str, Any]]],
+    run_dir: Path,
+    timeout: int,
+    workers: int,
+    verbose: bool = False,
+) -> list[SimRunResult]:
+    results: list[SimRunResult] = []
+    total = len(jobs)
+    if total == 0:
+        return []
+    info(f"Running {total:,} sims with {workers} worker(s)")
+
+    def one(job: tuple[str, dict[str, Any], dict[str, Any]]) -> SimRunResult:
+        label, req, meta = job
+        result = run_single_sim(wowsimcli, req, run_dir, label, timeout=timeout, verbose=verbose)
+        for key, value in meta.items():
+            setattr(result, key, value)
+        return result
+
+    completed = 0
+    if workers <= 1:
+        for job in jobs:
+            results.append(one(job))
+            completed += 1
+            if completed % 10 == 0 or completed == total:
+                info(f"Completed {completed:,}/{total:,} sims")
+        return results
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = {pool.submit(one, job): job for job in jobs}
+        for fut in concurrent.futures.as_completed(future_map):
+            try:
+                results.append(fut.result())
+            except Exception as exc:  # noqa: BLE001
+                label = future_map[fut][0]
+                results.append(SimRunResult(label=label, request_path=run_dir / "missing", result_path=run_dir / "missing", dps=None, error=str(exc)))
+            completed += 1
+            if completed % 10 == 0 or completed == total:
+                info(f"Completed {completed:,}/{total:,} sims")
+    return results
+
+
+# ----------------------------- Reports ---------------------------------------
+
+
+def write_results_csv(path: Path, results: Sequence[SimRunResult]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "label",
+        "item_id",
+        "item_name",
+        "slot",
+        "dps",
+        "percent_change",
+        "source",
+        "optimization_status",
+        "error",
+        "seconds",
+        "request_path",
+        "result_path",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for r in results:
+            writer.writerow(
+                {
+                    "label": r.label,
+                    "item_id": r.item_id or "",
+                    "item_name": r.item_name,
+                    "slot": r.slot,
+                    "dps": f"{r.dps:.3f}" if r.dps is not None else "",
+                    "percent_change": f"{r.percent_change:.4f}" if r.percent_change is not None else "",
+                    "source": r.source,
+                    "optimization_status": r.optimization_status,
+                    "error": r.error,
+                    "seconds": f"{r.seconds:.2f}",
+                    "request_path": str(r.request_path),
+                    "result_path": str(r.result_path),
+                }
+            )
+
+
+def write_upgrade_report(
+    path: Path,
+    baseline: SimRunResult,
+    upgrades: Sequence[SimRunResult],
+    threshold: float,
+    all_results_csv: Path,
+) -> None:
+    winners = [r for r in upgrades if r.dps is not None and (r.percent_change or 0) >= threshold]
+    winners.sort(key=lambda r: (r.percent_change or -999, r.dps or -1), reverse=True)
+    lines = [
+        "# WoWSims MoP Upgrade Sim Report",
+        "",
+        f"Generated UTC: {utc_stamp()}",
+        f"Baseline DPS: {baseline.dps:.2f}" if baseline.dps is not None else f"Baseline failed: {baseline.error}",
+        f"Upgrade threshold: {threshold:.2f}%",
+        f"All results CSV: `{all_results_csv.name}`",
+        "",
+        "## Upgrades meeting threshold",
+        "",
+    ]
+    if not winners:
+        lines.append("No candidate reached the configured threshold.")
+    else:
+        lines.append("| Rank | Item | Slot | DPS | Upgrade % | Source | Optimization |")
+        lines.append("|---:|---|---|---:|---:|---|---|")
+        for i, r in enumerate(winners, 1):
+            lines.append(
+                "| {rank} | {item} | {slot} | {dps:.2f} | {pct:.2f}% | {source} | {opt} |".format(
+                    rank=i,
+                    item=escape_md(r.item_name or r.label),
+                    slot=escape_md(r.slot),
+                    dps=r.dps or 0,
+                    pct=r.percent_change or 0,
+                    source=escape_md(r.source or "Unknown"),
+                    opt=escape_md(r.optimization_status or "Not annotated"),
+                )
+            )
+    lines.extend(
+        [
+            "",
+            "## Notes",
+            "",
+            "- Each row is a single item replacement into the baseline request.",
+            "- If `optimization` says `not fully optimized`, the sim used the item spec provided/exported plus any script-selected slot mutation, but did not run a proven upstream gem/enchant/reforge optimizer.",
+            "- Keep enough iterations high enough for stable percent differences before making expensive loot/crafting decisions.",
+            "",
+        ]
+    )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_normal_report(path: Path, baseline: SimRunResult, request_path: Path) -> None:
+    lines = [
+        "# WoWSims MoP Normal Sim Report",
+        "",
+        f"Generated UTC: {utc_stamp()}",
+        f"Request: `{request_path.name}`",
+        f"Result: `{baseline.result_path.name}`",
+        "",
+    ]
+    if baseline.dps is not None:
+        lines.append(f"Baseline DPS: **{baseline.dps:.2f}**")
+    else:
+        lines.append(f"Sim failed: `{baseline.error}`")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def escape_md(text: Any) -> str:
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+# ----------------------------- Modes -----------------------------------------
+
+
+def run_normal(args: argparse.Namespace, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:
+    result = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
+    write_normal_report(out_dir / "normal_report.md", result, result.request_path)
+    if result.dps is not None:
+        info(f"Baseline DPS: {result.dps:.2f}")
+    else:
+        warn(f"Sim failed: {result.error}")
+
+
+def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:
+    item_index = load_item_index(paths.mop, paths.cache, refresh=args.refresh_item_index)
+    bag_kind, bag_payload = prompt_bag_payload(args, wowsimcli, out_dir)
+    candidates = build_candidate_specs(
+        request,
+        bag_kind,
+        bag_payload,
+        item_index,
+        source_mode=args.upgrade_candidate_source,
+        max_db_candidates=args.max_db_candidates,
+        min_ilvl=args.min_ilvl,
+        max_ilvl=args.max_ilvl,
+    )
+    if not candidates:
+        die("No usable upgrade candidates were found. Provide a WSE bag export or use --upgrade-candidate-source db/both.")
+    baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
+    if baseline.dps is None:
+        die(f"Baseline sim failed, cannot compare upgrades. Error:\n{baseline.error}")
+    info(f"Baseline DPS: {baseline.dps:.2f}")
+    jobs: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    for spec in candidates:
+        item_id = int(spec.get("id") or 0)
+        for label, req, slot_idx, slot_name in replacement_requests_for_item(request, spec, item_index):
+            meta = item_index.get(item_id)
+            source = source_text_for_item(item_id, item_index, paths.cache, no_wowhead=args.no_wowhead)
+            jobs.append(
+                (
+                    label,
+                    req,
+                    {
+                        "item_id": item_id,
+                        "item_name": item_name(item_id, item_index),
+                        "slot_index": slot_idx,
+                        "slot": slot_name,
+                        "source": source,
+                        "optimization_status": optimizer_status(args, meta),
+                    },
+                )
+            )
+    if args.max_upgrade_sims and len(jobs) > args.max_upgrade_sims:
+        warn(f"Capping upgrade sim jobs from {len(jobs):,} to {args.max_upgrade_sims:,}. Use --max-upgrade-sims 0 for no cap.")
+        jobs = jobs[: args.max_upgrade_sims]
+    results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli)
+    for r in results:
+        if r.dps is not None:
+            r.percent_change = ((r.dps - baseline.dps) / baseline.dps) * 100.0
+    results.sort(key=lambda r: (r.percent_change if r.percent_change is not None else -99999, r.dps or -1), reverse=True)
+    csv_path = out_dir / "upgrade_results.csv"
+    write_results_csv(csv_path, results)
+    write_upgrade_report(out_dir / "upgrade_report.md", baseline, results, args.upgrade_threshold, csv_path)
+    winners = [r for r in results if r.percent_change is not None and r.percent_change >= args.upgrade_threshold]
+    if winners:
+        print()
+        print(f"Top upgrades >= {args.upgrade_threshold:.2f}%:")
+        for r in winners[:20]:
+            print(f"  {r.percent_change:7.2f}%  {r.dps:10.2f} DPS  {r.item_name} @ {r.slot} — {r.source}")
+    else:
+        info(f"No upgrades reached >= {args.upgrade_threshold:.2f}%.")
+    info(f"Wrote upgrade report: {out_dir / 'upgrade_report.md'}")
+
+
+def optimizer_status(args: argparse.Namespace, meta: ItemMeta | None) -> str:
+    if args.require_optimizer:
+        die(
+            "--require-optimizer was set, but this script did not find a proven upstream MoP CLI optimizer. "
+            "Use the Codex goal included with this bundle to wire the UI/import/reforge optimizer into a local command."
+        )
+    if args.optimizer_strategy == "none":
+        return "not optimized; raw candidate item spec"
+    if args.optimizer_strategy == "preserve-exported":
+        return "not fully optimized; preserved exported item gems/enchant/reforge when present"
+    if args.optimizer_strategy == "copy-current-slot-mods":
+        return "not fully optimized; copied current-slot mods only when adapter supports it"
+    return "not fully optimized; upstream optimizer adapter not detected"
+
+
+def run_batch(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:
+    item_index = load_item_index(paths.mop, paths.cache, refresh=args.refresh_item_index)
+    bag_kind, bag_payload = prompt_bag_payload(args, wowsimcli, out_dir)
+    candidates = build_candidate_specs(
+        request,
+        bag_kind,
+        bag_payload,
+        item_index,
+        source_mode="bag" if args.upgrade_candidate_source == "db" else args.upgrade_candidate_source,
+        max_db_candidates=args.max_db_candidates,
+        min_ilvl=args.min_ilvl,
+        max_ilvl=args.max_ilvl,
+    )
+    if not candidates:
+        die("No usable batch candidates were found. Provide a WSE bag export.")
+    baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
+    if baseline.dps is None:
+        die(f"Baseline sim failed, cannot compare batch results. Error:\n{baseline.error}")
+    combos = combination_requests(request, candidates, item_index, max_combinations=args.max_batch_combinations)
+    jobs: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    for label, req, used_ids in combos:
+        jobs.append((label, req, {"optimization_status": optimizer_status(args, None)}))
+    results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli)
+    for r in results:
+        if r.dps is not None:
+            r.percent_change = ((r.dps - baseline.dps) / baseline.dps) * 100.0
+    results.sort(key=lambda r: (r.percent_change if r.percent_change is not None else -99999, r.dps or -1), reverse=True)
+    csv_path = out_dir / "batch_results.csv"
+    write_results_csv(csv_path, results)
+    lines = [
+        "# WoWSims MoP Batch Sim Report",
+        "",
+        f"Generated UTC: {utc_stamp()}",
+        f"Baseline DPS: {baseline.dps:.2f}",
+        f"Candidates: {len(candidates)}",
+        f"Combinations simulated: {len(results)}",
+        f"All results CSV: `{csv_path.name}`",
+        "",
+        "## Top results",
+        "",
+        "| Rank | Combination | DPS | Change % | Optimization |",
+        "|---:|---|---:|---:|---|",
+    ]
+    for i, r in enumerate(results[:50], 1):
+        lines.append(f"| {i} | {escape_md(r.label)} | {r.dps or 0:.2f} | {r.percent_change or 0:.2f}% | {escape_md(r.optimization_status)} |")
+    (out_dir / "batch_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    info(f"Wrote batch report: {out_dir / 'batch_report.md'}")
+
+
+# ----------------------------- CLI / main ------------------------------------
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run local WoWSims MoP sims from WSE exports.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--workdir", type=Path, default=None, help="Folder where mop/exporter/results/cache should live. Default: script folder.")
+    parser.add_argument("--skip-update", action="store_true", help="Do not fetch/pull existing repos.")
+    parser.add_argument("--force-cli-download", action="store_true", help="Force re-download/rebuild of wowsimcli.")
+    parser.add_argument("--mode", choices=["normal", "batch", "upgrade"], default=None, help="Simulation mode. Prompts if omitted.")
+    parser.add_argument("--export", default="", help="WSE export / wowsims link / RaidSimRequest JSON / path. Use @path to force file.")
+    parser.add_argument("--template", default="", help="Optional WoWSims share link / IndividualSimSettings / RaidSimRequest used as WSE import template.")
+    parser.add_argument("--bag-export", default="", help="Optional WSE bag export / EquipmentSpec JSON / path for batch/upgrade candidates.")
+    parser.add_argument("--iterations", type=int, default=10000, help="Iterations for generated requests.")
+    parser.add_argument("--workers", type=int, default=max(1, min(4, (os.cpu_count() or 2) // 2)), help="Parallel wowsimcli processes for batch/upgrade runs.")
+    parser.add_argument("--timeout", type=int, default=900, help="Timeout per sim process, seconds.")
+    parser.add_argument("--upgrade-threshold", type=float, default=5.0, help="Minimum DPS percent increase for upgrade report winners.")
+    parser.add_argument("--upgrade-candidate-source", choices=["bag", "db", "both"], default="bag", help="Where upgrade candidates come from.")
+    parser.add_argument("--max-db-candidates", type=int, default=250, help="Max DB candidates when --upgrade-candidate-source includes db. 0 = no cap.")
+    parser.add_argument("--max-upgrade-sims", type=int, default=0, help="Max single-swap upgrade sim jobs. 0 = no cap.")
+    parser.add_argument("--max-batch-combinations", type=int, default=10000, help="Max batch combinations. 0 = no cap.")
+    parser.add_argument("--min-ilvl", type=int, default=None, help="Minimum item level for DB candidates.")
+    parser.add_argument("--max-ilvl", type=int, default=None, help="Maximum item level for DB candidates.")
+    parser.add_argument("--optimizer-strategy", choices=["preserve-exported", "copy-current-slot-mods", "none"], default="preserve-exported", help="How to handle gem/enchant/reforge without upstream optimizer adapter.")
+    parser.add_argument("--require-optimizer", action="store_true", help="Abort unless a proven upstream optimizer adapter is available.")
+    parser.add_argument("--refresh-item-index", action="store_true", help="Re-scan WoWSims repo for item metadata.")
+    parser.add_argument("--no-wowhead", action="store_true", help="Do not query Wowhead when source data is missing locally.")
+    parser.add_argument("--no-prompt", action="store_true", help="Noninteractive mode: fail instead of prompting for missing input.")
+    parser.add_argument("--verbose-cli", action="store_true", help="Pass --verbose to wowsimcli sim.")
+    return parser.parse_args(argv)
+
+
+def choose_mode(current: str | None, no_prompt: bool = False) -> str:
+    if current:
+        return current
+    if no_prompt:
+        die("--mode is required with --no-prompt.")
+    print()
+    print("Choose sim mode:")
+    print("  1) normal  - currently equipped gear only")
+    print("  2) batch   - equipped gear plus combinations of usable bag items")
+    print("  3) upgrade - single-item replacement trials and >= threshold upgrade report")
+    choice = input("Mode [normal/batch/upgrade or 1/2/3]: ").strip().lower()
+    return {"1": "normal", "2": "batch", "3": "upgrade", "n": "normal", "b": "batch", "u": "upgrade"}.get(choice, choice or "normal")
+
+
+def maybe_prompt_template(kind: str, args: argparse.Namespace) -> str:
+    template = load_blob_or_path(args.template) if args.template else ""
+    if template or args.no_prompt:
+        return template
+    if kind == "wse_character":
+        print()
+        print(
+            "Recommended: provide a WoWSims share link or RaidSimRequest JSON from the UI for this same spec so buffs, APL, encounter, and sim settings are preserved."
+        )
+        answer = input("Provide template/share link now? [Y/n]: ").strip().lower()
+        if answer in {"", "y", "yes"}:
+            return prompt_blob("Paste the WoWSims share link / IndividualSimSettings / RaidSimRequest JSON template.", allow_blank=False)
+    return ""
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    script_dir = Path(__file__).resolve().parent
+    root = (args.workdir or script_dir).expanduser().resolve()
+    paths = RunnerPaths(
+        root=root,
+        mop=root / "mop",
+        exporter=root / "exporter",
+        cache=root / ".wowsims_mop_runner" / "cache",
+        bin_dir=root / ".wowsims_mop_runner" / "bin",
+        results=root / "wowsims_mop_results",
+    )
+    paths.cache.mkdir(parents=True, exist_ok=True)
+    paths.results.mkdir(parents=True, exist_ok=True)
+
+    ensure_repo(MOP_REPO_URL, paths.mop, skip_update=args.skip_update)
+    ensure_repo(EXPORTER_REPO_URL, paths.exporter, skip_update=args.skip_update)
+    wowsimcli = ensure_wowsimcli(paths, force_download=args.force_cli_download)
+
+    out_dir = paths.results / utc_stamp()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    export_blob = load_blob_or_path(args.export) if args.export else ""
+    if not export_blob and not args.no_prompt:
+        export_blob = prompt_blob("Paste your WSE export from /wse export, a WoWSims share link, RaidSimRequest JSON, or @file.")
+    if not export_blob:
+        die("No export input provided. Use --export @path or run interactively.")
+
+    kind, payload = load_user_payload(export_blob, wowsimcli, out_dir)
+    info(f"Detected input type: {kind}")
+    if kind == "unknown":
+        die("Could not recognize input. Expected WSE character JSON, EquipmentSpec JSON, IndividualSimSettings, RaidSimRequest, or WoWSims share link.")
+
+    mode = choose_mode(args.mode, no_prompt=args.no_prompt)
+    if mode not in {"normal", "batch", "upgrade"}:
+        die(f"Unknown mode {mode!r}")
+
+    template_blob = maybe_prompt_template(kind, args)
+    request = build_request_from_payload(kind, payload, wowsimcli, out_dir, iterations=args.iterations, template_blob=template_blob)
+    write_json_file(out_dir / "effective_raid_sim_request.json", request)
+
+    if mode == "normal":
+        run_normal(args, wowsimcli, request, out_dir)
+    elif mode == "batch":
+        run_batch(args, paths, wowsimcli, request, out_dir)
+    elif mode == "upgrade":
+        run_upgrade(args, paths, wowsimcli, request, out_dir)
+    info(f"Output folder: {out_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RunnerError as exc:
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        raise SystemExit(130)
