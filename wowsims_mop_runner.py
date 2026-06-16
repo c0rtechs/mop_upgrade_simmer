@@ -1316,6 +1316,15 @@ def normalize_equipment_spec(equipment: Any) -> dict[str, Any]:
     return {"items": [normalize_item_spec(item) if item else {} for item in items]}
 
 
+def normalize_wse_character_gear(equipment: Any) -> dict[str, Any]:
+    if not isinstance(equipment, dict):
+        return {"items": []}
+    items = equipment.get("items") or []
+    if not isinstance(items, list):
+        return {"items": []}
+    return {"items": [normalize_item_spec(item) for item in items if item is not None]}
+
+
 def normalize_wse_glyphs(glyphs: Any, glyph_spell_to_item: Mapping[int, int] | None = None) -> dict[str, int]:
     if not isinstance(glyphs, dict):
         return {}
@@ -1545,7 +1554,7 @@ def minimal_request_from_wse_character(
         "name": str(character.get("name") or "WSE Character"),
         "race": race_enum,
         "class": class_enum,
-        "equipment": normalize_equipment_spec(character.get("gear")),
+        "equipment": normalize_wse_character_gear(character.get("gear")),
         "talents_string": str(character.get("talents") or ""),
         "glyphs": normalize_wse_glyphs(character.get("glyphs"), glyph_spell_to_item),
         "profession1": profession1,
@@ -1595,7 +1604,7 @@ def inject_wse_character_into_request(
             f"Template spec {template_spec} does not match WSE spec {spec_enum}. "
             "Provide a matching WoWSims template/share link."
         )
-    player["equipment"] = normalize_equipment_spec(character.get("gear"))
+    player["equipment"] = normalize_wse_character_gear(character.get("gear"))
     player.pop("gear", None)
     if character.get("talents"):
         player["talents_string"] = str(character.get("talents"))
