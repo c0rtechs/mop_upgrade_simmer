@@ -33,7 +33,7 @@ The known hard parts are intentionally isolated:
   - [ ] Auto-reforge each candidate based on official reforge optimizer/settings.
   - [ ] Preserve profession-only gem/enchant restrictions.
   - [ ] Handle hit/expertise caps and soft caps exactly like the UI.
-- [ ] If MoP backend supports bulk sim APIs, add a local CLI patch/overlay command and have Python call it instead of one process per candidate.
+- [x] Confirm MoP backend does not expose a bulk sim API to patch/overlay; keep Python one-request-per-candidate execution with hashing/cache/resume.
 - [x] If backend bulk APIs are absent, optimize the Python multi-process runner with stable request hashing, result caching, resume support, and safe process limits.
 - [x] Replace the metadata scanner with direct loading of the canonical generated item database.
 - [x] Resolve `UIItemSource` into human-readable source text using local `UINPC` and `UIZone` tables before falling back to Wowhead.
