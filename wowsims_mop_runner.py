@@ -1337,14 +1337,29 @@ def normalize_wse_glyphs(glyphs: Any, glyph_spell_to_item: Mapping[int, int] | N
             if glyph_spell_to_item is not None:
                 return glyph_spell_to_item.get(spell_id or 0, 0)
             return spell_id
-        else:
-            value = entry
-        with contextlib.suppress(TypeError, ValueError):
-            return int(value)
+        value = entry
+        parsed = as_int(value)
+        if parsed is not None:
+            return parsed
+        if isinstance(value, str) and value.strip():
+            die(
+                f"Cannot import legacy WSE glyph name {value!r}; this runner only accepts "
+                "current WSE glyph tables with spellID values or numeric glyph IDs."
+            )
         return None
 
-    majors = [glyph_id(x) for x in glyphs.get("major", []) if glyph_id(x)]
-    minors = [glyph_id(x) for x in glyphs.get("minor", []) if glyph_id(x)]
+    def glyph_ids(entries: Any) -> list[int]:
+        if not isinstance(entries, list):
+            return []
+        values: list[int] = []
+        for entry in entries:
+            value = glyph_id(entry)
+            if value:
+                values.append(value)
+        return values
+
+    majors = glyph_ids(glyphs.get("major", []))
+    minors = glyph_ids(glyphs.get("minor", []))
     for i, value in enumerate(majors[:3], 1):
         out[f"major{i}"] = value
     for i, value in enumerate(minors[:3], 1):

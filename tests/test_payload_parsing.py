@@ -112,6 +112,20 @@ class PayloadParsingTests(unittest.TestCase):
 
         self.assertEqual(items, [{"id": 10}, {"id": 11, "gems": [0, 12]}])
 
+    def test_wse_legacy_glyph_names_fail_closed_without_ui_name_mapping(self):
+        character = {
+            "class": "monk",
+            "spec": "brewmaster",
+            "race": "orc",
+            "gear": {"items": [{"id": 10}]},
+            "glyphs": {"major": ["Glyph of Guard"], "minor": []},
+        }
+
+        with self.assertRaises(runner.RunnerError) as ctx:
+            runner.minimal_request_from_wse_character(character, 100)
+
+        self.assertIn("legacy WSE glyph name 'Glyph of Guard'", str(ctx.exception))
+
     def test_parse_decodelink_stdout_accepts_json_with_cli_prefix(self):
         parsed = runner.parse_decodelink_stdout('decoded ok\n{"raid": {}, "simOptions": {}}\n')
 
