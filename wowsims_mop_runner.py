@@ -233,6 +233,180 @@ PROFESSION_ENUM_BY_NAME = {
     "archaeology": "Archeology",
 }
 
+ITEM_TYPE_NAMES = {
+    0: "ItemTypeUnknown",
+    1: "ItemTypeHead",
+    2: "ItemTypeNeck",
+    3: "ItemTypeShoulder",
+    4: "ItemTypeBack",
+    5: "ItemTypeChest",
+    6: "ItemTypeWrist",
+    7: "ItemTypeHands",
+    8: "ItemTypeWaist",
+    9: "ItemTypeLegs",
+    10: "ItemTypeFeet",
+    11: "ItemTypeFinger",
+    12: "ItemTypeTrinket",
+    13: "ItemTypeWeapon",
+    14: "ItemTypeRanged",
+}
+
+ARMOR_TYPE_NAMES = {
+    0: "ArmorTypeUnknown",
+    1: "ArmorTypeCloth",
+    2: "ArmorTypeLeather",
+    3: "ArmorTypeMail",
+    4: "ArmorTypePlate",
+}
+
+WEAPON_TYPE_NAMES = {
+    0: "WeaponTypeUnknown",
+    1: "WeaponTypeAxe",
+    2: "WeaponTypeDagger",
+    3: "WeaponTypeFist",
+    4: "WeaponTypeMace",
+    5: "WeaponTypeOffHand",
+    6: "WeaponTypePolearm",
+    7: "WeaponTypeShield",
+    8: "WeaponTypeStaff",
+    9: "WeaponTypeSword",
+}
+
+HAND_TYPE_NAMES = {
+    0: "HandTypeUnknown",
+    1: "HandTypeMainHand",
+    2: "HandTypeOneHand",
+    3: "HandTypeOffHand",
+    4: "HandTypeTwoHand",
+}
+
+RANGED_WEAPON_TYPE_NAMES = {
+    0: "RangedWeaponTypeUnknown",
+    1: "RangedWeaponTypeBow",
+    2: "RangedWeaponTypeCrossbow",
+    3: "RangedWeaponTypeGun",
+    5: "RangedWeaponTypeThrown",
+    6: "RangedWeaponTypeWand",
+}
+
+CLASS_NAMES = {
+    0: "ClassUnknown",
+    1: "ClassWarrior",
+    2: "ClassPaladin",
+    3: "ClassHunter",
+    4: "ClassRogue",
+    5: "ClassPriest",
+    6: "ClassDeathKnight",
+    7: "ClassShaman",
+    8: "ClassMage",
+    9: "ClassWarlock",
+    10: "ClassMonk",
+    11: "ClassDruid",
+}
+
+PROFESSION_NAMES = {
+    0: "ProfessionUnknown",
+    1: "Alchemy",
+    2: "Blacksmithing",
+    3: "Enchanting",
+    4: "Engineering",
+    5: "Herbalism",
+    6: "Inscription",
+    7: "Jewelcrafting",
+    8: "Leatherworking",
+    9: "Mining",
+    10: "Skinning",
+    11: "Tailoring",
+    12: "Archeology",
+}
+
+QUALITY_NAMES = {
+    0: "ItemQualityJunk",
+    1: "ItemQualityCommon",
+    2: "ItemQualityUncommon",
+    3: "ItemQualityRare",
+    4: "ItemQualityEpic",
+    5: "ItemQualityLegendary",
+    6: "ItemQualityArtifact",
+    7: "ItemQualityHeirloom",
+}
+
+DIFFICULTY_NAMES = {
+    0: "Unknown",
+    1: "Normal",
+    2: "Heroic",
+    3: "10-player Raid",
+    4: "10-player Heroic Raid",
+    5: "25-player Raid",
+    6: "25-player Heroic Raid",
+    7: "Titan Rune Alpha",
+    8: "Titan Rune Beta",
+    9: "Raid Finder",
+    10: "Celestial",
+    11: "Flexible Raid",
+    12: "Vendor",
+    "DifficultyUnknown": "Unknown",
+    "DifficultyNormal": "Normal",
+    "DifficultyHeroic": "Heroic",
+    "DifficultyTitanRuneAlpha": "Titan Rune Alpha",
+    "DifficultyTitanRuneBeta": "Titan Rune Beta",
+    "DifficultyCelestial": "Celestial",
+    "DifficultyRaid10": "10-player Raid",
+    "DifficultyRaid10H": "10-player Heroic Raid",
+    "DifficultyRaid25": "25-player Raid",
+    "DifficultyRaid25H": "25-player Heroic Raid",
+    "DifficultyRaid25RF": "Raid Finder",
+    "DifficultyRaidFlex": "Flexible Raid",
+    "DifficultyVendor": "Vendor",
+}
+
+REP_LEVEL_NAMES = {
+    0: "Unknown",
+    1: "Hated",
+    2: "Hostile",
+    3: "Unfriendly",
+    4: "Neutral",
+    5: "Friendly",
+    6: "Honored",
+    7: "Revered",
+    8: "Exalted",
+}
+
+REP_FACTION_NAMES = {
+    0: "Unknown",
+    1135: "The Earthen Ring",
+    1158: "Guardians of Hyjal",
+    1171: "Therazane",
+    1172: "Dragonmaw Clan",
+    1173: "Ramkahen",
+    1174: "Wildhammer Clan",
+    1177: "Baradin's Wardens",
+    1178: "Hellscream's Reach",
+    1204: "Avengers of Hyjal",
+    1269: "Golden Lotus",
+    1270: "Shado-Pan",
+    1271: "Order of the Cloud Serpent",
+    1272: "The Tillers",
+    1302: "The Anglers",
+    1337: "The Klaxxi",
+    1341: "The August Celestials",
+    1345: "The Lorewalkers",
+    1351: "The Brewmasters",
+    1359: "The Black Prince",
+    1375: "Dominance Offensive",
+    1376: "Operation: Shieldwall",
+    1387: "Kirin Tor Offensive",
+    1388: "Sunreaver Onslaught",
+    1435: "Shado-Pan Assault",
+    1492: "Emperor Shaohao",
+}
+
+FACTION_NAMES = {
+    0: "Unknown",
+    1: "Alliance",
+    2: "Horde",
+}
+
 CLASS_ARMOR_MAX = {
     "ClassWarrior": "ArmorTypePlate",
     "ClassPaladin": "ArmorTypePlate",
@@ -263,28 +437,7 @@ CLASS_WEAPONS = {
     "ClassWarlock": {"WeaponTypeDagger", "WeaponTypeStaff", "WeaponTypeSword", "WeaponTypeOffHand"},
 }
 
-SOURCE_DIFFICULTY_NAMES = {
-    0: "Unknown",
-    1: "Normal",
-    2: "Heroic",
-    3: "10-player Raid",
-    4: "10-player Heroic Raid",
-    5: "25-player Raid",
-    6: "25-player Heroic Raid",
-    9: "Raid Finder",
-    11: "Flexible Raid",
-    12: "Vendor",
-    "DifficultyUnknown": "Unknown",
-    "DifficultyNormal": "Normal",
-    "DifficultyHeroic": "Heroic",
-    "DifficultyRaid10": "10-player Raid",
-    "DifficultyRaid10H": "10-player Heroic Raid",
-    "DifficultyRaid25": "25-player Raid",
-    "DifficultyRaid25H": "25-player Heroic Raid",
-    "DifficultyRaid25RF": "Raid Finder",
-    "DifficultyRaidFlex": "Flexible Raid",
-    "DifficultyVendor": "Vendor",
-}
+SOURCE_DIFFICULTY_NAMES = DIFFICULTY_NAMES
 
 
 class RunnerError(RuntimeError):
@@ -307,13 +460,24 @@ class ItemMeta:
     armor_type: str = ""
     weapon_type: str = ""
     hand_type: str = ""
+    ranged_weapon_type: str = ""
     ilvl: int | None = None
     quality: str = ""
     phase: int | None = None
+    unique: bool = False
+    limit_category: int | None = None
+    faction_restriction: str = ""
     class_allowlist: list[str] = dataclasses.field(default_factory=list)
     required_profession: str = ""
     sources: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     raw: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+
+@dataclasses.dataclass(frozen=True)
+class SkippedItem:
+    item_id: int
+    item_name: str
+    reason: str
 
 
 @dataclasses.dataclass
@@ -397,6 +561,38 @@ def run_cmd(
 def read_json_file(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def as_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def enum_name(value: Any, names: Mapping[int, str], default: str = "") -> str:
+    if value is None or value == "":
+        return default
+    if isinstance(value, str):
+        if value in names.values():
+            return value
+        parsed = as_int(value)
+        if parsed is None:
+            return value
+        return names.get(parsed, default or value)
+    parsed = as_int(value)
+    if parsed is None:
+        return default
+    return names.get(parsed, default or str(value))
+
+
+def first_present(mapping: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return None
 
 
 def write_json_file(path: Path, data: Any, pretty: bool = True) -> None:
@@ -1080,41 +1276,52 @@ def request_equipment_items(request: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def load_item_index(mop_dir: Path, cache_dir: Path, refresh: bool = False) -> dict[int, ItemMeta]:
-    cache_path = cache_dir / "item_index.json"
+    cache_path = cache_dir / "canonical_item_index.json"
     if cache_path.exists() and not refresh:
         with contextlib.suppress(Exception):
             raw = read_json_file(cache_path)
             return {int(k): ItemMeta(**v) for k, v in raw.items()}
-    info("Scanning local WoWSims repo for item metadata")
-    index: dict[int, ItemMeta] = {}
-    # 1) Prefer real JSON/protojson-ish DB assets if present.
-    likely_roots = [
-        mop_dir / "assets",
-        mop_dir / "ui" / "assets",
-        mop_dir / "ui" / "core" / "assets",
-        mop_dir / "ui" / "core" / "proto",
-        mop_dir / "sim" / "core",
-        mop_dir / "sim" / "common",
+    info("Loading item metadata from WoWSims generated database")
+    index = load_canonical_item_index(mop_dir)
+    if not index:
+        paths = ", ".join(str(path) for path in canonical_db_paths(mop_dir))
+        die(f"Could not load WoWSims item metadata. Expected generated database at one of: {paths}")
+    write_json_file(cache_path, {str(k): dataclasses.asdict(v) for k, v in index.items()})
+    info(f"Loaded metadata for {len(index):,} items from generated WoWSims database")
+    return index
+
+
+def canonical_db_paths(mop_dir: Path) -> list[Path]:
+    return [
+        mop_dir / "assets" / "database" / "db.json",
+        mop_dir / "assets" / "database" / "leftover_db.json",
     ]
-    files: list[Path] = []
-    for root in likely_roots:
-        if root.exists():
-            for suffix in ("*.json", "*.protojson", "*.ts", "*.go"):
-                files.extend(p for p in root.rglob(suffix) if p.is_file() and p.stat().st_size < 25_000_000)
-    seen: set[Path] = set()
-    for path in files:
-        if path in seen:
+
+
+def load_canonical_item_index(mop_dir: Path) -> dict[int, ItemMeta]:
+    index: dict[int, ItemMeta] = {}
+    for path in canonical_db_paths(mop_dir):
+        if not path.exists():
             continue
-        seen.add(path)
-        with contextlib.suppress(Exception):
-            text = path.read_text(encoding="utf-8", errors="ignore")
-            if path.suffix in {".json", ".protojson"}:
-                parse_json_item_file(text, index)
-            else:
-                parse_code_item_file(text, index)
-    if index:
-        write_json_file(cache_path, {str(k): dataclasses.asdict(v) for k, v in index.items()})
-    info(f"Loaded metadata for {len(index):,} items from local WoWSims files")
+        data = read_json_file(path)
+        if not isinstance(data, dict):
+            continue
+        zones = {
+            int(zone["id"]): str(zone.get("name") or "")
+            for zone in data.get("zones", []) or []
+            if isinstance(zone, dict) and as_int(zone.get("id")) is not None
+        }
+        npcs = {
+            int(npc["id"]): str(npc.get("name") or "")
+            for npc in data.get("npcs", []) or []
+            if isinstance(npc, dict) and as_int(npc.get("id")) is not None
+        }
+        for item in data.get("items", []) or []:
+            if not isinstance(item, dict) or as_int(item.get("id")) is None:
+                continue
+            meta = item_meta_from_dict(item, zones=zones, npcs=npcs)
+            if meta.id and (meta.id not in index or richer_meta(meta, index[meta.id])):
+                index[meta.id] = meta
     return index
 
 
@@ -1151,37 +1358,87 @@ def parse_json_item_file(text: str, index: dict[int, ItemMeta]) -> None:
                 index[item_id] = meta
 
 
+def best_scaling_option(item: Mapping[str, Any]) -> Mapping[str, Any]:
+    options = item.get("scalingOptions") or item.get("scaling_options") or {}
+    if not isinstance(options, Mapping):
+        return {}
+    keyed: list[tuple[int, Mapping[str, Any]]] = []
+    for key, value in options.items():
+        parsed = as_int(key)
+        if parsed is None or not isinstance(value, Mapping):
+            continue
+        keyed.append((parsed, value))
+    if not keyed:
+        return {}
+    return max(keyed, key=lambda pair: pair[0])[1]
+
+
+def source_mapping(src: Mapping[str, Any], *keys: str) -> MutableMapping[str, Any] | None:
+    for key in keys:
+        value = src.get(key)
+        if isinstance(value, MutableMapping):
+            return value
+    return None
+
+
+def normalize_sources(sources: Any, zones: Mapping[int, str], npcs: Mapping[int, str]) -> list[dict[str, Any]]:
+    if not isinstance(sources, list):
+        return []
+    normalized = copy.deepcopy(sources)
+    for src in normalized:
+        if not isinstance(src, MutableMapping):
+            continue
+        for node in (
+            source_mapping(src, "drop", "Drop"),
+            source_mapping(src, "soldBy", "sold_by", "SoldBy"),
+        ):
+            if node is None:
+                continue
+            npc_id = as_int(node.get("npcId", node.get("npc_id")))
+            zone_id = as_int(node.get("zoneId", node.get("zone_id")))
+            if npc_id is not None:
+                node.setdefault("npcName", npcs.get(npc_id, ""))
+                node.setdefault("npc_name", npcs.get(npc_id, ""))
+            if zone_id is not None:
+                node.setdefault("zoneName", zones.get(zone_id, ""))
+                node.setdefault("zone_name", zones.get(zone_id, ""))
+    return [dict(src) for src in normalized if isinstance(src, Mapping)]
+
+
 def item_meta_from_dict(item: dict[str, Any], zones: Mapping[int, str] | None = None, npcs: Mapping[int, str] | None = None) -> ItemMeta:
     zones = zones or {}
     npcs = npcs or {}
-    item_id = int(item.get("id") or item.get("itemId") or 0)
-    sources = item.get("sources") or item.get("Sources") or []
-    # Add resolved display fields for local source formatting.
-    if isinstance(sources, list):
-        for src in sources:
-            if not isinstance(src, dict):
-                continue
-            for key in ("drop", "Drop", "soldBy", "sold_by", "SoldBy"):
-                node = src.get(key)
-                if isinstance(node, dict):
-                    if node.get("npc_id") or node.get("npcId"):
-                        npc_id = int(node.get("npc_id") or node.get("npcId"))
-                        node.setdefault("npc_name", npcs.get(npc_id, ""))
-                    if node.get("zone_id") or node.get("zoneId"):
-                        zone_id = int(node.get("zone_id") or node.get("zoneId"))
-                        node.setdefault("zone_name", zones.get(zone_id, ""))
+    item_id = as_int(first_present(item, "id", "itemId")) or 0
+    scaling = best_scaling_option(item)
+    ilvl = as_int(first_present(item, "ilvl"))
+    if ilvl is None:
+        ilvl = as_int(first_present(scaling, "ilvl"))
+    raw_sources = first_present(item, "sources", "Sources") or []
+    sources = normalize_sources(raw_sources, zones=zones, npcs=npcs)
+    required_profession = enum_name(
+        first_present(item, "requiredProfession", "required_profession"),
+        PROFESSION_NAMES,
+    )
     return ItemMeta(
         id=item_id,
         name=str(item.get("name") or item.get("Name") or item.get("name_enus") or ""),
-        type=str(item.get("type") or item.get("itemType") or item.get("item_type") or ""),
-        armor_type=str(item.get("armorType") or item.get("armor_type") or item.get("armorTypeName") or ""),
-        weapon_type=str(item.get("weaponType") or item.get("weapon_type") or item.get("weaponTypeName") or ""),
-        hand_type=str(item.get("handType") or item.get("hand_type") or item.get("handTypeName") or ""),
-        ilvl=int(item["ilvl"]) if str(item.get("ilvl", "")).isdigit() else None,
-        quality=str(item.get("quality") or ""),
-        phase=int(item["phase"]) if str(item.get("phase", "")).isdigit() else None,
-        class_allowlist=[str(x) for x in item.get("classAllowlist", item.get("class_allowlist", [])) or []],
-        required_profession=str(item.get("requiredProfession") or item.get("required_profession") or ""),
+        type=enum_name(first_present(item, "type", "itemType", "item_type"), ITEM_TYPE_NAMES),
+        armor_type=enum_name(first_present(item, "armorType", "armor_type", "armorTypeName"), ARMOR_TYPE_NAMES),
+        weapon_type=enum_name(first_present(item, "weaponType", "weapon_type", "weaponTypeName"), WEAPON_TYPE_NAMES),
+        hand_type=enum_name(first_present(item, "handType", "hand_type", "handTypeName"), HAND_TYPE_NAMES),
+        ranged_weapon_type=enum_name(first_present(item, "rangedWeaponType", "ranged_weapon_type"), RANGED_WEAPON_TYPE_NAMES),
+        ilvl=ilvl,
+        quality=enum_name(first_present(item, "quality"), QUALITY_NAMES),
+        phase=as_int(first_present(item, "phase")),
+        unique=bool(item.get("unique") or False),
+        limit_category=as_int(first_present(item, "limitCategory", "limit_category")),
+        faction_restriction=enum_name(first_present(item, "factionRestriction", "faction_restriction"), {0: "", 1: "Alliance", 2: "Horde"}),
+        class_allowlist=[
+            enum_name(value, CLASS_NAMES)
+            for value in item.get("classAllowlist", item.get("class_allowlist", [])) or []
+            if enum_name(value, CLASS_NAMES)
+        ],
+        required_profession="" if required_profession == "ProfessionUnknown" else required_profession,
         sources=sources if isinstance(sources, list) else [],
         raw=item,
     )
@@ -1289,15 +1546,18 @@ def format_sources(sources: Sequence[Mapping[str, Any]]) -> str:
             continue
         crafted = first_mapping(src, "crafted", "Crafted")
         if crafted is not None:
-            prof = crafted.get("profession") or crafted.get("Profession") or "Crafting"
+            prof = enum_name(crafted.get("profession") or crafted.get("Profession"), PROFESSION_NAMES, "Crafting")
+            if prof == "ProfessionUnknown":
+                prof = "Crafting"
             spell = crafted.get("spell_id") or crafted.get("spellId") or crafted.get("spellID")
             chunks.append(f"Crafted: {prof}" + (f" (spell {spell})" if spell else ""))
             continue
         drop = first_mapping(src, "drop", "Drop")
         if drop is not None:
-            npc = drop.get("npc_name") or drop.get("npcName") or drop.get("other_name") or drop.get("otherName") or drop.get("npc_id") or drop.get("npcId") or "drop source"
+            npc = drop.get("other_name") or drop.get("otherName") or drop.get("npc_name") or drop.get("npcName") or drop.get("npc_id") or drop.get("npcId") or "drop source"
             zone = drop.get("zone_name") or drop.get("zoneName") or drop.get("zone_id") or drop.get("zoneId") or ""
-            diff = SOURCE_DIFFICULTY_NAMES.get(drop.get("difficulty"), drop.get("difficulty", ""))
+            difficulty_value = first_present(drop, "difficulty")
+            diff = SOURCE_DIFFICULTY_NAMES.get(as_int(difficulty_value) if as_int(difficulty_value) is not None else difficulty_value, difficulty_value or "")
             category = drop.get("category") or ""
             text = f"Drop: {npc}"
             if zone:
@@ -1319,9 +1579,21 @@ def format_sources(sources: Sequence[Mapping[str, Any]]) -> str:
             continue
         rep = first_mapping(src, "rep", "Rep")
         if rep is not None:
-            faction = rep.get("rep_faction_id") or rep.get("repFactionId") or rep.get("repFactionID") or "reputation"
-            level = rep.get("rep_level") or rep.get("repLevel") or ""
-            chunks.append(f"Reputation: {faction}" + (f" at {level}" if level else ""))
+            faction_value = first_present(rep, "rep_faction_id", "repFactionId", "repFactionID")
+            faction_id = as_int(faction_value)
+            faction = REP_FACTION_NAMES.get(faction_id if faction_id is not None else -1, str(faction_value or "reputation"))
+            level_value = first_present(rep, "rep_level", "repLevel")
+            level_id = as_int(level_value)
+            level = REP_LEVEL_NAMES.get(level_id if level_id is not None else -1, str(level_value or ""))
+            side_value = first_present(rep, "faction_id", "factionId")
+            side_id = as_int(side_value)
+            side = FACTION_NAMES.get(side_id if side_id is not None else -1, "")
+            text = f"Reputation: {faction}"
+            if level and level != "Unknown":
+                text += f" at {level}"
+            if side and side != "Unknown":
+                text += f" ({side})"
+            chunks.append(text)
             continue
     # Keep output readable.
     seen: list[str] = []
@@ -1405,6 +1677,14 @@ def extract_wowhead_source(page: str) -> str:
 # ----------------------------- Usability / candidates -------------------------
 
 
+def is_item_in_phase(meta: ItemMeta | None, phase: int | None) -> tuple[bool, str]:
+    if meta is None or phase is None or phase <= 0 or meta.phase is None:
+        return True, ""
+    if meta.phase > phase:
+        return False, f"phase {meta.phase} is above requested phase {phase}"
+    return True, ""
+
+
 def is_item_usable(meta: ItemMeta | None, class_enum: str, professions: set[str]) -> tuple[bool, str]:
     if meta is None:
         return False, "missing item metadata; cannot prove item is usable"
@@ -1434,6 +1714,20 @@ def player_class_and_professions(request: dict[str, Any]) -> tuple[str, set[str]
     class_enum = str(player.get("class") or player.get("class_") or "ClassUnknown")
     professions = {str(player.get("profession1") or ""), str(player.get("profession2") or "")}
     return class_enum, professions
+
+
+def request_phase(request: Mapping[str, Any]) -> int | None:
+    for key in ("sim_options", "simOptions", "settings"):
+        value = request.get(key)
+        if isinstance(value, Mapping):
+            phase = as_int(value.get("phase"))
+            if phase is not None:
+                return phase
+    return None
+
+
+def effective_phase(args: argparse.Namespace, request: Mapping[str, Any]) -> int | None:
+    return args.phase if args.phase is not None else request_phase(request)
 
 
 def extract_equipment_items_from_payload(kind: str, payload: Any) -> list[dict[str, Any]]:
@@ -1468,10 +1762,15 @@ def build_candidate_specs(
     max_db_candidates: int,
     min_ilvl: int | None,
     max_ilvl: int | None,
-) -> list[dict[str, Any]]:
+    phase: int | None = None,
+) -> tuple[list[dict[str, Any]], list[SkippedItem]]:
     equipped_ids = {int(item.get("id")) for item in request_equipment_items(request) if isinstance(item, dict) and item.get("id")}
     class_enum, professions = player_class_and_professions(request)
     candidates: dict[int, dict[str, Any]] = {}
+    skipped: list[SkippedItem] = []
+
+    def skip(item_id: int, reason: str) -> None:
+        skipped.append(SkippedItem(item_id=item_id, item_name=item_name(item_id, item_index), reason=reason))
 
     if source_mode in {"bag", "both"} and bag_payload is not None:
         for spec in extract_equipment_items_from_payload(bag_kind, bag_payload):
@@ -1489,13 +1788,21 @@ def build_candidate_specs(
             if item_id in equipped_ids or item_id in candidates:
                 continue
             if min_ilvl is not None and meta.ilvl is not None and meta.ilvl < min_ilvl:
+                skip(item_id, f"item level {meta.ilvl} is below minimum {min_ilvl}")
                 continue
             if max_ilvl is not None and meta.ilvl is not None and meta.ilvl > max_ilvl:
+                skip(item_id, f"item level {meta.ilvl} is above maximum {max_ilvl}")
+                continue
+            ok, reason = is_item_in_phase(meta, phase)
+            if not ok:
+                skip(item_id, reason)
                 continue
             ok, _reason = is_item_usable(meta, class_enum, professions)
             if not ok:
+                skip(item_id, _reason)
                 continue
             if not slot_indexes_for_item(meta):
+                skip(item_id, "no recognized equip slot")
                 continue
             candidates[item_id] = {"id": item_id}
             added += 1
@@ -1503,21 +1810,25 @@ def build_candidate_specs(
                 break
 
     usable: list[dict[str, Any]] = []
-    skipped: list[str] = []
     for item_id, spec in candidates.items():
         meta = item_index.get(item_id)
         slots = slot_indexes_for_item(meta, spec)
         if not slots:
-            skipped.append(f"{item_id}: no recognized equip slot")
+            skip(item_id, "no recognized equip slot")
+            continue
+        ok, reason = is_item_in_phase(meta, phase)
+        if not ok:
+            skip(item_id, reason)
             continue
         ok, reason = is_item_usable(meta, class_enum, professions)
         if not ok:
-            skipped.append(f"{item_id}: {reason}")
+            skip(item_id, reason)
             continue
         usable.append(normalize_item_spec(spec))
     if skipped:
-        info(f"Skipped {len(skipped)} candidate items that were not safely usable/mappable. First few: {'; '.join(skipped[:5])}")
-    return usable
+        first = "; ".join(f"{item.item_id}: {item.reason}" for item in skipped[:5])
+        info(f"Skipped {len(skipped)} candidate items that were not safely usable/mappable. First few: {first}")
+    return usable, skipped
 
 
 def replacement_requests_for_item(base_request: dict[str, Any], item_spec: dict[str, Any], item_index: Mapping[int, ItemMeta]) -> list[tuple[str, dict[str, Any], int, str]]:
@@ -1751,12 +2062,29 @@ def write_results_csv(path: Path, results: Sequence[SimRunResult]) -> None:
             )
 
 
+def write_skipped_items_csv(path: Path, skipped: Sequence[SkippedItem]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["item_id", "item_name", "reason"])
+        writer.writeheader()
+        for item in skipped:
+            writer.writerow(
+                {
+                    "item_id": item.item_id,
+                    "item_name": item.item_name,
+                    "reason": item.reason,
+                }
+            )
+
+
 def write_upgrade_report(
     path: Path,
     baseline: SimRunResult,
     upgrades: Sequence[SimRunResult],
     threshold: float,
     all_results_csv: Path,
+    skipped: Sequence[SkippedItem] = (),
+    skipped_csv: Path | None = None,
 ) -> None:
     winners = [r for r in upgrades if r.dps is not None and (r.percent_change or 0) >= threshold]
     winners.sort(key=lambda r: (r.percent_change or -999, r.dps or -1), reverse=True)
@@ -1788,6 +2116,26 @@ def write_upgrade_report(
                     opt=escape_md(r.optimization_status or "Not annotated"),
                 )
             )
+    lines.extend(
+        [
+            "",
+            "## Skipped Items",
+            "",
+        ]
+    )
+    if skipped:
+        lines.append(f"Skipped items: {len(skipped)}")
+        if skipped_csv is not None:
+            lines.append(f"Skipped item CSV: `{skipped_csv.name}`")
+        lines.append("")
+        lines.append("| Item | Reason |")
+        lines.append("|---|---|")
+        for item in skipped[:50]:
+            lines.append(f"| {escape_md(item.item_name or item.item_id)} | {escape_md(item.reason)} |")
+        if len(skipped) > 50:
+            lines.append(f"| ... | {len(skipped) - 50} additional skipped items in `{skipped_csv.name if skipped_csv else 'skipped item CSV'}` |")
+    else:
+        lines.append("No candidate items were skipped after candidate-source filtering.")
     lines.extend(
         [
             "",
@@ -1837,7 +2185,8 @@ def run_normal(args: argparse.Namespace, wowsimcli: Path, request: dict[str, Any
 def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:
     item_index = load_item_index(paths.mop, paths.cache, refresh=args.refresh_item_index)
     bag_kind, bag_payload = prompt_bag_payload(args, wowsimcli, out_dir)
-    candidates = build_candidate_specs(
+    phase = effective_phase(args, request)
+    candidates, skipped = build_candidate_specs(
         request,
         bag_kind,
         bag_payload,
@@ -1846,9 +2195,14 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
         max_db_candidates=args.max_db_candidates,
         min_ilvl=args.min_ilvl,
         max_ilvl=args.max_ilvl,
+        phase=phase,
     )
+    skipped_csv = out_dir / "skipped_items.csv" if skipped else None
+    if skipped_csv is not None:
+        write_skipped_items_csv(skipped_csv, skipped)
     if not candidates:
-        die("No usable upgrade candidates were found. Provide a WSE bag export or use --upgrade-candidate-source db/both.")
+        detail = f" Skipped item reasons were written to {skipped_csv}." if skipped_csv is not None else ""
+        die(f"No usable upgrade candidates were found. Provide a WSE bag export or use --upgrade-candidate-source db/both.{detail}")
     baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
     if baseline.dps is None:
         die(f"Baseline sim failed, cannot compare upgrades. Error:\n{baseline.error}")
@@ -1883,7 +2237,7 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
     results.sort(key=lambda r: (r.percent_change if r.percent_change is not None else -99999, r.dps or -1), reverse=True)
     csv_path = out_dir / "upgrade_results.csv"
     write_results_csv(csv_path, results)
-    write_upgrade_report(out_dir / "upgrade_report.md", baseline, results, args.upgrade_threshold, csv_path)
+    write_upgrade_report(out_dir / "upgrade_report.md", baseline, results, args.upgrade_threshold, csv_path, skipped=skipped, skipped_csv=skipped_csv)
     winners = [r for r in results if r.percent_change is not None and r.percent_change >= args.upgrade_threshold]
     if winners:
         print()
@@ -1913,7 +2267,8 @@ def optimizer_status(args: argparse.Namespace, meta: ItemMeta | None) -> str:
 def run_batch(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:
     item_index = load_item_index(paths.mop, paths.cache, refresh=args.refresh_item_index)
     bag_kind, bag_payload = prompt_bag_payload(args, wowsimcli, out_dir)
-    candidates = build_candidate_specs(
+    phase = effective_phase(args, request)
+    candidates, skipped = build_candidate_specs(
         request,
         bag_kind,
         bag_payload,
@@ -1922,9 +2277,14 @@ def run_batch(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, req
         max_db_candidates=args.max_db_candidates,
         min_ilvl=args.min_ilvl,
         max_ilvl=args.max_ilvl,
+        phase=phase,
     )
+    skipped_csv = out_dir / "skipped_items.csv" if skipped else None
+    if skipped_csv is not None:
+        write_skipped_items_csv(skipped_csv, skipped)
     if not candidates:
-        die("No usable batch candidates were found. Provide a WSE bag export.")
+        detail = f" Skipped item reasons were written to {skipped_csv}." if skipped_csv is not None else ""
+        die(f"No usable batch candidates were found. Provide a WSE bag export.{detail}")
     baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
     if baseline.dps is None:
         die(f"Baseline sim failed, cannot compare batch results. Error:\n{baseline.error}")
@@ -1947,6 +2307,7 @@ def run_batch(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, req
         f"Candidates: {len(candidates)}",
         f"Combinations simulated: {len(results)}",
         f"All results CSV: `{csv_path.name}`",
+        f"Skipped items CSV: `{skipped_csv.name}`" if skipped_csv is not None else "Skipped items: 0",
         "",
         "## Top results",
         "",
@@ -1984,6 +2345,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--max-batch-combinations", type=int, default=10000, help="Max batch combinations. 0 = no cap.")
     parser.add_argument("--min-ilvl", type=int, default=None, help="Minimum item level for DB candidates.")
     parser.add_argument("--max-ilvl", type=int, default=None, help="Maximum item level for DB candidates.")
+    parser.add_argument("--phase", type=int, default=None, help="Maximum MoP content phase for candidate items. Defaults from template settings when present.")
     parser.add_argument("--optimizer-strategy", choices=["preserve-exported", "copy-current-slot-mods", "none"], default="preserve-exported", help="How to handle gem/enchant/reforge without upstream optimizer adapter.")
     parser.add_argument("--require-optimizer", action="store_true", help="Abort unless a proven upstream optimizer adapter is available.")
     parser.add_argument("--refresh-item-index", action="store_true", help="Re-scan WoWSims repo for item metadata.")

@@ -35,26 +35,26 @@ The known hard parts are intentionally isolated:
   - [ ] Handle hit/expertise caps and soft caps exactly like the UI.
 - [ ] If MoP backend supports bulk sim APIs, add a local CLI patch/overlay command and have Python call it instead of one process per candidate.
 - [ ] If backend bulk APIs are absent, optimize the Python multi-process runner with stable request hashing, result caching, resume support, and safe process limits.
-- [ ] Replace the metadata scanner with direct loading of the canonical generated item database.
-- [ ] Resolve `UIItemSource` into human-readable source text using local `UINPC` and `UIZone` tables before falling back to Wowhead.
+- [x] Replace the metadata scanner with direct loading of the canonical generated item database.
+- [x] Resolve `UIItemSource` into human-readable source text using local `UINPC` and `UIZone` tables before falling back to Wowhead.
 - [ ] Improve Wowhead fallback parsing for MoP Classic pages, including drop bosses, raid difficulty, vendors, crafting spells, quests, reputation, and contained-in sources.
 - [ ] Enforce usable-item filtering:
-  - [ ] Class allowlist.
-  - [ ] Armor proficiency.
+  - [x] Class allowlist.
+  - [x] Armor proficiency.
   - [ ] Weapon proficiency.
   - [ ] Hand/offhand/two-hand constraints.
   - [ ] Unique-equipped and limit-category constraints.
-  - [ ] Profession requirements.
+  - [x] Profession requirements.
   - [ ] Faction restrictions.
-  - [ ] Phase and item-level filters.
-- [ ] Add a `--phase` option and default it from the template/settings when possible.
+  - [x] Phase and item-level filters.
+- [x] Add a `--phase` option and default it from the template/settings when possible.
 - [ ] Add richer reports:
   - [ ] Baseline DPS and confidence/iterations.
   - [ ] Upgrade DPS delta and percent delta.
-  - [ ] Source location/drop/craft/vendor/quest/reputation.
+  - [x] Source location/drop/craft/vendor/quest/reputation.
   - [ ] Slot, item level, phase, quality.
   - [ ] Optimization details: gems, enchants, reforges selected.
-  - [ ] Skipped items and exact skip reason.
+  - [x] Skipped items and exact skip reason.
 - [ ] Add regression tests for:
   - [ ] `decodelink` share-link parsing.
   - [ ] WSE character parsing.
@@ -62,7 +62,7 @@ The known hard parts are intentionally isolated:
   - [ ] IndividualSimSettings -> RaidSimRequest conversion.
   - [ ] Request gear injection.
   - [ ] DPS extraction from `RaidSimResult`.
-  - [ ] Item source formatting.
+  - [x] Item source formatting.
   - [ ] Slot filtering and class usability.
 - [ ] Ensure Windows, macOS, and Linux behavior works.
 - [ ] Update the README with exact tested commands and known limitations.
