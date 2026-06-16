@@ -2580,7 +2580,7 @@ def extract_equipment_items_from_payload(kind: str, payload: Any) -> list[dict[s
     if kind == "equipment_spec":
         return normalize_equipment_spec(payload)["items"]
     if kind == "wse_character":
-        return normalize_equipment_spec(payload.get("gear"))["items"]
+        return normalize_wse_character_gear(payload.get("gear"))["items"]
     if kind in {"raid_request", "individual_settings"}:
         req = payload if kind == "raid_request" else convert_individual_settings_to_raid_request(payload)
         return [normalize_item_spec(x) for x in request_equipment_items(req)]

@@ -100,6 +100,18 @@ class PayloadParsingTests(unittest.TestCase):
 
         self.assertEqual(player["equipment"], {"items": [{"id": 10}, {"id": 11, "gems": [0, 12]}]})
 
+    def test_wse_character_item_extraction_uses_addon_importer_gear_normalization(self):
+        character = {
+            "class": "monk",
+            "spec": "brewmaster",
+            "race": "orc",
+            "gear": {"items": [{"id": 10}, None, {"id": 11, "gems": [None, 12]}]},
+        }
+
+        items = runner.extract_equipment_items_from_payload("wse_character", character)
+
+        self.assertEqual(items, [{"id": 10}, {"id": 11, "gems": [0, 12]}])
+
     def test_parse_decodelink_stdout_accepts_json_with_cli_prefix(self):
         parsed = runner.parse_decodelink_stdout('decoded ok\n{"raid": {}, "simOptions": {}}\n')
 
