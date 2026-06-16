@@ -45,7 +45,7 @@ On first run, it will create:
 
 2. Copy the exporter string.
 3. Start the script and paste the WSE export when prompted.
-4. When prompted for a WoWSims template/share link, provide a known-good WoWSims share link or `RaidSimRequest` JSON for the same class/spec. This preserves your sim settings, APL, buffs, debuffs, and encounter settings.
+4. When prompted for a WoWSims template/share link, provide a known-good WoWSims share link or `RaidSimRequest` JSON for the same class/spec when you want an exact UI configuration. If no template is provided, the runner loads an official default build JSON from the checked-out `wowsims/mop` UI files when one can be resolved for the exported spec. If no official default build is available, it fails closed instead of inventing sim settings.
 5. Choose one of:
    - `normal` - current gear only.
    - `batch` - current gear plus bag-item combinations.
@@ -62,6 +62,28 @@ python wowsims_mop_runner.py \
   --export @my_wse_export.json \
   --template "https://www.wowsims.com/mop/windwalker_monk/#..." \
   --iterations 20000
+```
+
+Normal sim from WSE-only input, using an official default build from the local
+`wowsims/mop` checkout when available:
+
+```bash
+python wowsims_mop_runner.py \
+  --mode normal \
+  --export @fixtures/brewmaster_wse.json \
+  --iterations 1000 \
+  --no-prompt
+```
+
+Normal sim with the committed fixture WSE export and fixture template:
+
+```bash
+python wowsims_mop_runner.py \
+  --mode normal \
+  --export @fixtures/brewmaster_wse.json \
+  --template @fixtures/brewmaster_template.json \
+  --iterations 1000 \
+  --no-prompt
 ```
 
 Upgrade sims from bag items, reporting upgrades of at least 5% DPS:
@@ -152,10 +174,11 @@ The current MoP `wowsimcli` is a low-level sim runner. It accepts `RaidSimReques
 
 - It can run accurate sims when given a known-good WoWSims template/share link or `RaidSimRequest` JSON.
 - It can inject WSE gear/talents/glyphs into that template. WSE glyph spell IDs are converted to WoWSims glyph item IDs using the canonical local `glyphIds` database table, matching the official Addon importer behavior.
+- For WSE-only input, it resolves the exported class/spec to the official UI spec directory, parses `defaultBuild: Presets.X` from `sim.ts` or `sim.tsx`, resolves `X` through `presets.ts`, and uses the imported `.build.json` as the default `IndividualSimSettings` before injecting WSE gear/talents/glyphs. If a spec has no unambiguous official build JSON, the runner refuses to run without `--template`.
 - It can run single-item replacement simulations.
 - It will not pretend to have fully optimized gem/enchant/reforge results unless a proven upstream optimizer adapter is added.
 - `--require-optimizer` remains fail-closed. The current upstream optimizer lives in browser UI code and worker-backed reforge logic, not in `wowsimcli`.
-- WSE-only request generation still uses local mapping helpers. For production-quality sim settings, continue to provide a known-good template/share link from the official UI.
+- For exact production-quality UI settings, continue to provide a known-good template/share link from the official UI; the WSE-only path uses the official default build, not a custom UI configuration.
 - Candidate filtering uses canonical DB class, armor, weapon/ranged weapon, hand/offhand, profession, faction, unique-equipped, limit-category, item-level, and phase data. Weapon and slot rules mirror the upstream UI class tables and `canEquipItem` behavior where it can be represented from the local request.
 
 ## Validation
@@ -165,6 +188,9 @@ Current local validation commands:
 ```bash
 python -m unittest -v
 python -m py_compile wowsims_mop_runner.py tests/test_item_database.py tests/test_payload_parsing.py
+python wowsims_mop_runner.py --mode normal --export @fixtures/brewmaster_wse.json --template @fixtures/brewmaster_template.json --iterations 1000 --no-prompt --output-dir ./.wowsims_mop_runner/debug_fixture_template_normal_1000
+python wowsims_mop_runner.py --mode normal --export @exports/equipped_only_export.json --iterations 1 --no-prompt --output-dir ./.wowsims_mop_runner/debug_wse_only_official_default
+python wowsims_mop_runner.py --mode upgrade --export @exports/equipped_only_export.json --bag-export @exports/batch_bag_items_export.json --iterations 1 --no-prompt --output-dir ./.wowsims_mop_runner/debug_upgrade_wse_only_official_default --workers 4 --upgrade-threshold 0
 ```
 
 The saved local `exports/equipped_only_export.json` and

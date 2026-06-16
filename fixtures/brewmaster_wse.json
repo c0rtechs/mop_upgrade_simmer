@@ -1,0 +1,185 @@
+{
+  "talents": "213121",
+  "glyphs": {
+    "minor": [
+      {
+        "spellID": 125901
+      },
+      {
+        "spellID": 125154
+      },
+      {
+        "spellID": 125893
+      }
+    ],
+    "major": [
+      {
+        "spellID": 124997
+      },
+      {
+        "spellID": 123391
+      },
+      {
+        "spellID": 120477
+      }
+    ]
+  },
+  "class": "monk",
+  "unit": "player",
+  "professions": [
+    {
+      "name": "Blacksmithing",
+      "level": 600
+    },
+    {
+      "name": "Engineering",
+      "level": 600
+    }
+  ],
+  "race": "Orc",
+  "name": "Fixture Brewmaster",
+  "spec": "brewmaster",
+  "gear": {
+    "items": [
+      {
+        "id": 96651,
+        "reforging": 167,
+        "upgrade_step": 2,
+        "gems": [
+          95346,
+          76633
+        ]
+      },
+      {
+        "id": 103750,
+        "reforging": 146,
+        "upgrade_step": 2,
+        "gems": []
+      },
+      {
+        "enchant": 4804,
+        "id": 96653,
+        "reforging": 138,
+        "upgrade_step": 2,
+        "gems": [
+          76659,
+          76697
+        ]
+      },
+      {
+        "enchant": 4424,
+        "id": 102248,
+        "reforging": 168,
+        "upgrade_step": 2,
+        "gems": [
+          76659
+        ]
+      },
+      {
+        "enchant": 4419,
+        "id": 95033,
+        "reforging": 153,
+        "upgrade_step": 2,
+        "gems": [
+          76659,
+          76659,
+          76659
+        ]
+      },
+      {
+        "id": 96392,
+        "gems": [
+          76699
+        ],
+        "upgrade_step": 2,
+        "enchant": 4416
+      },
+      {
+        "enchant": 4430,
+        "gems": [
+          76659,
+          76633
+        ],
+        "id": 96650,
+        "reforging": 159,
+        "upgrade_step": 2,
+        "tinker": 4898
+      },
+      {
+        "id": 96837,
+        "reforging": 159,
+        "upgrade_step": 2,
+        "gems": [
+          76659,
+          76633,
+          76699
+        ]
+      },
+      {
+        "enchant": 4822,
+        "id": 96652,
+        "reforging": 137,
+        "upgrade_step": 2,
+        "gems": [
+          76631,
+          76575
+        ]
+      },
+      {
+        "id": 95007,
+        "gems": [
+          76699,
+          76575
+        ],
+        "upgrade_step": 2,
+        "enchant": 4428
+      },
+      {
+        "id": 96513,
+        "gems": [
+          76699
+        ],
+        "upgrade_step": 2
+      },
+      {
+        "id": 95021,
+        "reforging": 137,
+        "upgrade_step": 2,
+        "gems": [
+          76575
+        ]
+      },
+      {
+        "id": 102301,
+        "gems": [],
+        "upgrade_step": 2
+      },
+      {
+        "id": 96918,
+        "gems": [],
+        "upgrade_step": 2
+      },
+      {
+        "enchant": 4444,
+        "id": 104434,
+        "reforging": 138,
+        "upgrade_step": 2,
+        "gems": [
+          76681
+        ]
+      },
+      {
+        "enchant": 4444,
+        "id": 96535,
+        "reforging": 153,
+        "upgrade_step": 2,
+        "gems": [
+          76659,
+          76631
+        ]
+      }
+    ]
+  },
+  "level": 90,
+  "version": "fixture"
+}

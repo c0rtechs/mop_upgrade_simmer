@@ -102,6 +102,34 @@ class PayloadParsingTests(unittest.TestCase):
         self.assertEqual(player["profession1"], "Engineering")
         self.assertEqual(player["equipment"], {"items": [{"id": 1}]})
 
+    def test_inject_wse_character_does_not_create_duplicate_sim_options_alias(self):
+        template = {
+            "raid": {
+                "parties": [
+                    {
+                        "players": [
+                            {
+                                "class": "ClassMonk",
+                                "race": "RaceOrc",
+                                "brewmaster_monk": {"options": {"class_options": {}}},
+                                "equipment": {"items": [{"id": 99}]},
+                            }
+                        ]
+                    }
+                ],
+                "num_active_parties": 1,
+            },
+            "encounter": {"duration": 300},
+            "sim_options": {"iterations": 10},
+            "type": "SimTypeIndividual",
+        }
+        character = {"class": "monk", "race": "orc", "gear": {"items": [{"id": 1}]}}
+
+        request = runner.inject_wse_character_into_request(template, character, iterations=250)
+
+        self.assertEqual(request["sim_options"], {"iterations": 250})
+        self.assertNotIn("simOptions", request)
+
     def test_individual_settings_convert_to_raid_request(self):
         settings = {
             "player": {
@@ -129,6 +157,113 @@ class PayloadParsingTests(unittest.TestCase):
         self.assertEqual(request["raid"]["parties"][0]["buffs"], {"leaderOfThePack": True})
         self.assertEqual(request["raid"]["debuffs"], {"weakenedArmor": True})
         self.assertEqual(request["raid"]["target_dummies"], 1)
+
+    def test_individual_settings_conversion_allocates_party_capacity_for_target_dummies(self):
+        settings = {
+            "player": {
+                "name": "Example",
+                "class": "ClassMonk",
+                "race": "RaceOrc",
+                "brewmaster_monk": {"options": {"class_options": {}}},
+                "equipment": {"items": [{"id": 1}]},
+            },
+            "settings": {"iterations": 500},
+            "encounter": {"duration": 180},
+            "targetDummies": 9,
+        }
+
+        request = runner.convert_individual_settings_to_raid_request(settings)
+
+        self.assertEqual(request["raid"]["target_dummies"], 9)
+        self.assertEqual(request["raid"]["num_active_parties"], 2)
+        self.assertEqual(len(request["raid"]["parties"]), 2)
+
+    def test_wse_only_build_uses_official_default_build_before_injection(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            spec_dir = root / "ui" / "monk" / "brewmaster"
+            builds_dir = spec_dir / "builds"
+            builds_dir.mkdir(parents=True)
+            (spec_dir / "sim.ts").write_text(
+                "const SPEC_CONFIG = registerSpecConfig(Spec.SpecBrewmasterMonk, {\n"
+                "  defaultBuild: Presets.PRESET_BUILD_HORRIDON,\n"
+                "});\n",
+                encoding="utf-8",
+            )
+            (spec_dir / "presets.ts").write_text(
+                "import HorridonBuild from './builds/horridon_encounter_only.build.json';\n"
+                "export const PRESET_BUILD_HORRIDON = PresetUtils.makePresetBuildFromJSON('Horridon', Spec.SpecBrewmasterMonk, HorridonBuild);\n",
+                encoding="utf-8",
+            )
+            (builds_dir / "horridon_encounter_only.build.json").write_text(
+                """
+                {
+                  "player": {
+                    "name": "Preset",
+                    "race": "RaceOrc",
+                    "class": "ClassMonk",
+                    "brewmasterMonk": {"options": {"classOptions": {}}},
+                    "talentsString": "111111"
+                  },
+                  "encounter": {"duration": 93},
+                  "targetDummies": 9
+                }
+                """,
+                encoding="utf-8",
+            )
+            character = {
+                "name": "WSE",
+                "class": "monk",
+                "spec": "brewmaster",
+                "race": "orc",
+                "talents": "213121",
+                "gear": {"items": [{"id": 1}]},
+            }
+
+            request = runner.build_request_from_payload(
+                "wse_character",
+                character,
+                Path("unused-wowsimcli"),
+                root / "out",
+                250,
+                mop_dir=root,
+            )
+
+        player = runner.get_request_player(request)
+        self.assertEqual(request["encounter"], {"duration": 93})
+        self.assertEqual(request["sim_options"], {"iterations": 250})
+        self.assertEqual(request["raid"]["target_dummies"], 9)
+        self.assertEqual(request["raid"]["num_active_parties"], 2)
+        self.assertEqual(player["equipment"], {"items": [{"id": 1}]})
+        self.assertEqual(player["talents_string"], "213121")
+        self.assertEqual(player["brewmasterMonk"], {"options": {"classOptions": {}}})
+
+    def test_wse_only_without_official_default_build_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            character = {
+                "name": "WSE",
+                "class": "monk",
+                "spec": "brewmaster",
+                "race": "orc",
+                "gear": {"items": [{"id": 1}]},
+            }
+
+            with self.assertRaises(runner.RunnerError) as ctx:
+                runner.build_request_from_payload(
+                    "wse_character",
+                    character,
+                    Path("unused-wowsimcli"),
+                    Path(temp) / "out",
+                    250,
+                    mop_dir=Path(temp),
+                )
+
+        self.assertIn("No official WoWSims default build", str(ctx.exception))
+
+    def test_player_spec_enum_accepts_official_camel_case_oneof_key(self):
+        player = {"class": "ClassMonk", "brewmasterMonk": {"options": {"classOptions": {}}}}
+
+        self.assertEqual(runner.player_spec_enum(player), "SpecBrewmasterMonk")
 
     def test_extract_dps_handles_raid_metrics_and_recursive_fallback(self):
         self.assertEqual(runner.extract_dps({"raidMetrics": {"dps": {"avg": 123.5}}}), 123.5)

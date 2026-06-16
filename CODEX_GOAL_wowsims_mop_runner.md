@@ -25,7 +25,7 @@ The known hard parts are intentionally isolated:
 
 - [ ] Replace all heuristic WSE -> request conversion with the same mapping used by the official UI importer.
 - [ ] Add a deterministic path to create a valid `RaidSimRequest` from WSE-only input for every launched MoP spec, using official presets/defaults where available.
-- [ ] Add a test fixture for at least one exported WSE character JSON and verify the generated `RaidSimRequest` is accepted by `wowsimcli sim`.
+- [x] Add a test fixture for at least one exported WSE character JSON and verify the generated `RaidSimRequest` is accepted by `wowsimcli sim`.
 - [x] Add fixture tests for WSE bag export parsing and slot mapping.
 - [ ] Implement true optimizer support for candidate items:
   - [ ] Auto-gem candidate based on official gem optimizer/default gems.
@@ -69,8 +69,8 @@ The known hard parts are intentionally isolated:
 
 ## Acceptance criteria
 
-- [ ] `python wowsims_mop_runner.py --mode normal --export @fixtures/<spec>_wse.json --template @fixtures/<spec>_template.json --iterations 1000 --no-prompt` runs successfully and prints baseline DPS.
-- [ ] `upgrade` mode runs baseline plus single-swap candidate sims from a WSE bag export and writes `upgrade_report.md` + `upgrade_results.csv`.
+- [x] `python wowsims_mop_runner.py --mode normal --export @fixtures/<spec>_wse.json --template @fixtures/<spec>_template.json --iterations 1000 --no-prompt` runs successfully and prints baseline DPS.
+- [x] `upgrade` mode runs baseline plus single-swap candidate sims from a WSE bag export and writes `upgrade_report.md` + `upgrade_results.csv`.
 - [x] Every upgrade row includes item name, slot, DPS, percent change, and best available source location.
 - [ ] When optimizer support is enabled, every candidate request is gemmed/enchanted/reforged using the official WoWSims logic or an explicitly equivalent backend implementation.
 - [x] If optimizer support is not available, the script refuses `--require-optimizer` and clearly annotates report rows as not fully optimized.

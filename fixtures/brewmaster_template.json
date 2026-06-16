@@ -1,0 +1,109 @@
+{
+  "player": {
+    "name": "Fixture Brewmaster",
+    "race": "RaceOrc",
+    "class": "ClassMonk",
+    "brewmasterMonk": {
+      "options": {
+        "classOptions": {}
+      }
+    },
+    "talentsString": "213121",
+    "glyphs": {
+      "major1": 87893,
+      "major2": 85700,
+      "major3": 85695,
+      "minor1": 87889,
+      "minor2": 87887,
+      "minor3": 87890
+    },
+    "profession1": "Blacksmithing",
+    "profession2": "Engineering",
+    "consumables": {
+      "potId": 76090,
+      "flaskId": 76087,
+      "foodId": 74656,
+      "conjuredId": 5512
+    },
+    "buffs": {
+      "vigilanceCount": 2
+    },
+    "cooldowns": {
+      "hpPercentForDefensives": 0.3
+    },
+    "rotation": {
+      "type": "TypeAPL",
+      "priorityList": [
+        {
+          "action": {
+            "autocastOtherCooldowns": {}
+          }
+        },
+        {
+          "action": {
+            "castSpell": {
+              "spellId": {
+                "spellId": 121253
+              }
+            }
+          }
+        },
+        {
+          "action": {
+            "castSpell": {
+              "spellId": {
+                "spellId": 100780
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reactionTimeMs": 250,
+    "inFrontOfTarget": true,
+    "distanceFromTarget": 5,
+    "healingModel": {
+      "hps": 91787,
+      "cadenceSeconds": 0.37,
+      "cadenceVariation": 1.31,
+      "absorbFrac": 0.14,
+      "burstWindow": 6
+    }
+  },
+  "raidBuffs": {
+    "trueshotAura": true,
+    "unleashedRage": true,
+    "darkIntent": true,
+    "moonkinAura": true,
+    "legacyOfTheWhiteTiger": true,
+    "blessingOfMight": true,
+    "legacyOfTheEmperor": true,
+    "bloodlust": true
+  },
+  "partyBuffs": {},
+  "debuffs": {
+    "weakenedBlows": true,
+    "physicalVulnerability": true,
+    "weakenedArmor": true,
+    "curseOfElements": true
+  },
+  "tanks": [
+    {
+      "type": "Player"
+    }
+  ],
+  "encounter": {
+    "apiVersion": 2,
+    "duration": 180,
+    "durationVariation": 0,
+    "executeProportion20": 0.2,
+    "targets": [
+      {
+        "id": 0,
+        "name": "Target Dummy",
+        "level": 93,
+        "mobType": "MobTypeHumanoid"
+      }
+    ]
+  }
+}

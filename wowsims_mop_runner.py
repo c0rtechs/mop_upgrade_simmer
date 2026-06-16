@@ -69,6 +69,8 @@ GITHUB_API = "https://api.github.com"
 WOWHEAD_MOP_CLASSIC_ITEM_URL = "https://www.wowhead.com/mop-classic/item={item_id}"
 
 SCRIPT_VERSION = "2026.06.16-1"
+RAID_PARTY_SIZE = 5
+MAX_RAID_PARTIES = 5
 
 # EquipmentSpec item order from WSE / WoWSims proto. WSE still includes a ranged slot
 # in the exported equipment layout; MoP proto ItemSlot only enumerates through offhand.
@@ -219,6 +221,20 @@ SPEC_FIELD_BY_CLASS_AND_SPEC = {
     ("deathknight", "frost"): "frost_death_knight",
     ("death knight", "frost"): "frost_death_knight",
 }
+
+UI_CLASS_DIR_SUFFIXES = (
+    "death_knight",
+    "druid",
+    "hunter",
+    "mage",
+    "monk",
+    "paladin",
+    "priest",
+    "rogue",
+    "shaman",
+    "warlock",
+    "warrior",
+)
 
 PROFESSION_ENUM_BY_NAME = {
     "alchemy": "Alchemy",
@@ -1335,12 +1351,49 @@ def professions_from_wse(professions: Any) -> tuple[str, str]:
     return vals[0], vals[1]
 
 
+def lower_camel_from_snake(value: str) -> str:
+    parts = value.split("_")
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+
+def player_spec_oneof_keys() -> set[str]:
+    keys: set[str] = set()
+    for field in SPEC_ENUM_BY_PLAYER_FIELD:
+        keys.add(field)
+        keys.add(lower_camel_from_snake(field))
+    return keys
+
+
+PLAYER_NODE_HINT_KEYS = {
+    "class",
+    "race",
+    "talentsString",
+    "talents_string",
+    "glyphs",
+    "rotation",
+    "profession1",
+    "profession2",
+    "consumables",
+    "buffs",
+    "cooldowns",
+}
+
+
+def is_player_node(obj: Mapping[str, Any]) -> bool:
+    keys = set(obj.keys())
+    if keys & player_spec_oneof_keys():
+        return True
+    if ("equipment" in keys or "gear" in keys) and keys & PLAYER_NODE_HINT_KEYS:
+        return True
+    if "class" in keys and len(keys & PLAYER_NODE_HINT_KEYS) >= 2:
+        return True
+    return False
+
+
 def find_first_player_node(obj: Any) -> dict[str, Any] | None:
     if isinstance(obj, dict):
-        if "equipment" in obj or "gear" in obj:
-            # Avoid matching UIItem/item nodes: player also usually has race/class/spec-ish fields.
-            if any(k in obj for k in ("race", "class", "talentsString", "talents_string", "glyphs", "rotation")):
-                return obj
+        if is_player_node(obj):
+            return obj
         for value in obj.values():
             found = find_first_player_node(value)
             if found is not None:
@@ -1381,6 +1434,7 @@ def convert_individual_settings_to_raid_request(settings: dict[str, Any], iterat
     target_dummies = int(settings.get("targetDummies") or settings.get("target_dummies") or 0)
     if target_dummies:
         raid["target_dummies"] = target_dummies
+    ensure_raid_party_capacity(raid)
     return {
         "request_id": f"wse-runner-{utc_stamp()}",
         "raid": raid,
@@ -1406,6 +1460,44 @@ def default_encounter() -> dict[str, Any]:
             }
         ],
     }
+
+
+def ensure_raid_party_capacity(raid: dict[str, Any]) -> None:
+    parties = raid.get("parties")
+    if not isinstance(parties, list) or not parties:
+        parties = [{}]
+        raid["parties"] = parties
+
+    explicit_players = 0
+    for party in parties:
+        if not isinstance(party, Mapping):
+            continue
+        players = party.get("players")
+        if isinstance(players, list):
+            explicit_players += len([player for player in players if player])
+
+    target_dummies = as_int(raid.get("target_dummies", raid.get("targetDummies"))) or 0
+    required_slots = explicit_players + target_dummies
+    required_parties = max(1, math.ceil(required_slots / RAID_PARTY_SIZE))
+    if required_parties > MAX_RAID_PARTIES:
+        die(
+            f"Raid requires {required_parties} active parties for {explicit_players} players and "
+            f"{target_dummies} target dummies, but WoWSims supports at most {MAX_RAID_PARTIES}."
+        )
+
+    current_active_parties = as_int(raid.get("num_active_parties", raid.get("numActiveParties"))) or len(parties)
+    active_parties = max(1, current_active_parties, required_parties)
+    if active_parties > MAX_RAID_PARTIES:
+        die(
+            f"Raid declares {active_parties} active parties, but WoWSims supports at most {MAX_RAID_PARTIES}."
+        )
+
+    while len(parties) < active_parties:
+        parties.append({})
+    if "numActiveParties" in raid and "num_active_parties" not in raid:
+        raid["numActiveParties"] = active_parties
+    else:
+        raid["num_active_parties"] = active_parties
 
 
 def minimal_request_from_wse_character(
@@ -1468,9 +1560,89 @@ def inject_wse_character_into_request(
     if profession2 != "ProfessionUnknown":
         player["profession2"] = profession2
     if iterations:
-        sim_options = req.setdefault("sim_options", req.setdefault("simOptions", {}))
+        sim_options = ensure_sim_options(req)
         sim_options["iterations"] = int(iterations)
     return req
+
+
+def ui_spec_dir_for_player_field(mop_dir: Path, spec_field: str) -> Path | None:
+    for class_dir in sorted(UI_CLASS_DIR_SUFFIXES, key=len, reverse=True):
+        suffix = f"_{class_dir}"
+        if spec_field.endswith(suffix):
+            spec_dir = spec_field[: -len(suffix)]
+            if spec_dir:
+                return mop_dir / "ui" / class_dir / spec_dir
+    return None
+
+
+def resolve_preset_build_path(spec_dir: Path, preset_const: str) -> Path | None:
+    presets_path = spec_dir / "presets.ts"
+    if not presets_path.exists():
+        return None
+    text = presets_path.read_text(encoding="utf-8")
+    imports: dict[str, str] = {}
+    for match in re.finditer(r"import\s+(\w+)\s+from\s+['\"]([^'\"]+\.build\.json)['\"]\s*;", text):
+        imports[match.group(1)] = match.group(2)
+
+    export_pattern = re.compile(
+        rf"export\s+const\s+{re.escape(preset_const)}\s*=\s*PresetUtils\.makePresetBuildFromJSON\((.*?)\);",
+        flags=re.DOTALL,
+    )
+    export_match = export_pattern.search(text)
+    if not export_match:
+        return None
+    body = export_match.group(1)
+    build_arg = re.search(r"Spec\.\w+\s*,\s*(\w+)", body)
+    if not build_arg:
+        return None
+    import_path = imports.get(build_arg.group(1))
+    if not import_path:
+        return None
+    path = (presets_path.parent / Path(import_path)).resolve()
+    return path if path.exists() else None
+
+
+def official_default_build_path(mop_dir: Path, spec_field: str) -> Path | None:
+    spec_dir = ui_spec_dir_for_player_field(mop_dir, spec_field)
+    if spec_dir is None or not spec_dir.exists():
+        return None
+
+    for sim_name in ("sim.ts", "sim.tsx"):
+        sim_path = spec_dir / sim_name
+        if not sim_path.exists():
+            continue
+        sim_text = sim_path.read_text(encoding="utf-8")
+        default_build = re.search(r"defaultBuild\s*:\s*Presets\.(\w+)", sim_text)
+        if default_build:
+            resolved = resolve_preset_build_path(spec_dir, default_build.group(1))
+            if resolved is not None:
+                return resolved
+
+    build_dir = spec_dir / "builds"
+    build_files = sorted(build_dir.glob("*.build.json")) if build_dir.exists() else []
+    if len(build_files) == 1:
+        return build_files[0]
+    return None
+
+
+def official_default_settings_for_wse_character(mop_dir: Path, character: dict[str, Any]) -> dict[str, Any]:
+    spec_field = spec_field_from_wse(character.get("class"), character.get("spec"))
+    if not spec_field:
+        die(
+            "Could not map the WSE class/spec to a WoWSims player spec. "
+            "Provide a WoWSims template/share link with --template."
+        )
+    build_path = official_default_build_path(mop_dir, spec_field)
+    if build_path is None:
+        die(
+            f"No official WoWSims default build was found for WSE spec {spec_field!r}. "
+            "Provide a WoWSims template/share link with --template so buffs, APL, encounter, and spec options are known."
+        )
+    info(f"Using official WoWSims default build for WSE-only import: {build_path}")
+    settings = read_json_file(build_path)
+    if classify_payload(settings) != "individual_settings":
+        die(f"Official default build {build_path} was not an IndividualSimSettings JSON file.")
+    return settings
 
 
 def build_request_from_payload(
@@ -1481,6 +1653,7 @@ def build_request_from_payload(
     iterations: int,
     template_blob: str = "",
     glyph_spell_to_item: Mapping[int, int] | None = None,
+    mop_dir: Path | None = None,
 ) -> dict[str, Any]:
     if kind == "raid_request":
         req = copy.deepcopy(payload)
@@ -1503,21 +1676,34 @@ def build_request_from_payload(
             die(f"Template/share-link input must decode to IndividualSimSettings or RaidSimRequest, got {t_kind!r}.")
         return inject_wse_character_into_request(base, payload, iterations=iterations, glyph_spell_to_item=glyph_spell_to_item)
 
-    warn(
-        "No WoWSims template/share link was provided. Building a minimal request from WSE only. "
-        "This may be rejected by the sim or may not match your normal buffs/APL/encounter."
-    )
-    return minimal_request_from_wse_character(payload, iterations, glyph_spell_to_item=glyph_spell_to_item)
+    if mop_dir is None:
+        die(
+            "No WoWSims template/share link was provided and no MoP repo path was available to load official defaults. "
+            "Provide --template or call minimal_request_from_wse_character() explicitly for diagnostic-only requests."
+        )
+    settings = official_default_settings_for_wse_character(mop_dir, payload)
+    base = convert_individual_settings_to_raid_request(settings, iterations=iterations)
+    return inject_wse_character_into_request(base, payload, iterations=iterations, glyph_spell_to_item=glyph_spell_to_item)
 
 
 def set_iterations(request: dict[str, Any], iterations: int | None) -> None:
     if not iterations:
         return
-    sim_options = request.get("sim_options") or request.get("simOptions")
+    sim_options = ensure_sim_options(request)
+    sim_options["iterations"] = int(iterations)
+
+
+def ensure_sim_options(request: dict[str, Any]) -> dict[str, Any]:
+    has_snake = "sim_options" in request
+    has_camel = "simOptions" in request
+    if has_snake and has_camel:
+        die("RaidSimRequest contains both sim_options and simOptions; remove one casing before running.")
+    key = "sim_options" if has_snake or not has_camel else "simOptions"
+    sim_options = request.get(key)
     if not isinstance(sim_options, dict):
         sim_options = {}
-        request["sim_options"] = sim_options
-    sim_options["iterations"] = int(iterations)
+        request[key] = sim_options
+    return sim_options
 
 
 def request_equipment_items(request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2195,7 +2381,7 @@ def player_class_and_professions(request: dict[str, Any]) -> tuple[str, set[str]
 
 def player_spec_enum(player: Mapping[str, Any]) -> str:
     for field, spec_enum in SPEC_ENUM_BY_PLAYER_FIELD.items():
-        if field in player:
+        if field in player or lower_camel_from_snake(field) in player:
             return spec_enum
     value = player.get("spec") or player.get("spec_enum") or player.get("specEnum")
     if isinstance(value, str) and value.startswith("Spec"):
@@ -2878,7 +3064,7 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
         print()
         print(f"Top upgrades >= {args.upgrade_threshold:.2f}%:")
         for r in winners[:20]:
-            print(f"  {r.percent_change:7.2f}%  {r.dps:10.2f} DPS  {r.item_name} @ {r.slot} — {r.source}")
+            print(f"  {r.percent_change:7.2f}%  {r.dps:10.2f} DPS  {r.item_name} @ {r.slot} - {r.source}")
     else:
         info(f"No upgrades reached >= {args.upgrade_threshold:.2f}%.")
     info(f"Wrote upgrade report: {out_dir / 'upgrade_report.md'}")
@@ -3071,6 +3257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         iterations=args.iterations,
         template_blob=template_blob,
         glyph_spell_to_item=glyph_spell_to_item,
+        mop_dir=paths.mop,
     )
     write_json_file(out_dir / "effective_raid_sim_request.json", request)
 
