@@ -174,7 +174,7 @@ The current MoP `wowsimcli` is a low-level sim runner. It accepts `RaidSimReques
 
 - It can run accurate sims when given a known-good WoWSims template/share link or `RaidSimRequest` JSON.
 - It can inject WSE gear/talents/glyphs into that template. WSE glyph spell IDs are converted to WoWSims glyph item IDs using the canonical local `glyphIds` database table, matching the official Addon importer behavior.
-- For WSE-only input, it resolves the exported class/spec to the official UI spec directory, parses `defaultBuild: Presets.X` from `sim.ts` or `sim.tsx`, resolves `X` through `presets.ts`, and uses the imported `.build.json` as the default `IndividualSimSettings` before injecting WSE gear/talents/glyphs. If a spec has no unambiguous official build JSON, the runner refuses to run without `--template`.
+- For WSE-only input, it resolves the exported class/spec to the official UI spec directory, parses `defaultBuild: Presets.X` from `sim.ts` or `sim.tsx`, resolves `X` through `presets.ts`, and uses the imported `.build.json` as the default `IndividualSimSettings` before injecting WSE gear/talents/glyphs. When a spec has no explicit `defaultBuild`, the runner can also use a listed build whose embedded equipment exactly matches the UI `defaults.gear` preset. If a spec has no unambiguous official build JSON, the runner refuses to run without `--template`.
 - It can run single-item replacement simulations.
 - It will not pretend to have fully optimized gem/enchant/reforge results unless a proven upstream optimizer adapter is added.
 - `--require-optimizer` remains fail-closed. The current upstream optimizer lives in browser UI code and worker-backed reforge logic, not in `wowsimcli`.

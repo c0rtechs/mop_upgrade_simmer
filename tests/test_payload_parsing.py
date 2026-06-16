@@ -260,6 +260,51 @@ class PayloadParsingTests(unittest.TestCase):
 
         self.assertIn("No official WoWSims default build", str(ctx.exception))
 
+    def test_official_default_build_resolves_build_matching_default_gear(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            spec_dir = root / "ui" / "death_knight" / "unholy"
+            builds_dir = spec_dir / "builds"
+            gear_dir = spec_dir / "gear_sets"
+            builds_dir.mkdir(parents=True)
+            gear_dir.mkdir(parents=True)
+            (spec_dir / "sim.ts").write_text(
+                "const SPEC_CONFIG = registerSpecConfig(Spec.SpecUnholyDeathKnight, {\n"
+                "  defaults: {\n"
+                "    gear: Presets.P5_GEAR_PRESET.gear,\n"
+                "  },\n"
+                "  presets: {\n"
+                "    builds: [Presets.PREBIS_PRESET, Presets.P5_PRESET],\n"
+                "  },\n"
+                "});\n",
+                encoding="utf-8",
+            )
+            (spec_dir / "presets.ts").write_text(
+                "import P5Gear from './gear_sets/p5.gear.json';\n"
+                "import PrebisBuild from './builds/prebis.build.json';\n"
+                "import P5Build from './builds/p5.build.json';\n"
+                "export const P5_GEAR_PRESET = PresetUtils.makePresetGear('P5', P5Gear);\n"
+                "export const PREBIS_PRESET = PresetUtils.makePresetBuildFromJSON('Prebis', Spec.SpecUnholyDeathKnight, PrebisBuild);\n"
+                "export const P5_PRESET = PresetUtils.makePresetBuildFromJSON('P5', Spec.SpecUnholyDeathKnight, P5Build);\n",
+                encoding="utf-8",
+            )
+            (gear_dir / "p5.gear.json").write_text(
+                '{"items": [{"id": 20, "gems": [1, 0]}, {"id": 21}]}',
+                encoding="utf-8",
+            )
+            (builds_dir / "prebis.build.json").write_text(
+                '{"player": {"equipment": {"items": [{"id": 10}]}}}',
+                encoding="utf-8",
+            )
+            (builds_dir / "p5.build.json").write_text(
+                '{"player": {"equipment": {"items": [{"id": 20, "gems": [1, 0]}, {"id": 21}]}}}',
+                encoding="utf-8",
+            )
+
+            build_path = runner.official_default_build_path(root, "unholy_death_knight")
+
+        self.assertEqual(build_path, builds_dir / "p5.build.json")
+
     def test_player_spec_enum_accepts_official_camel_case_oneof_key(self):
         player = {"class": "ClassMonk", "brewmasterMonk": {"options": {"classOptions": {}}}}
 

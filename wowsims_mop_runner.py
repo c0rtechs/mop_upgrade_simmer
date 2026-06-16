@@ -1575,14 +1575,28 @@ def ui_spec_dir_for_player_field(mop_dir: Path, spec_field: str) -> Path | None:
     return None
 
 
+def ts_json_imports(path: Path, suffix: str) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    imports: dict[str, str] = {}
+    pattern = rf"import\s+(\w+)\s+from\s+['\"]([^'\"]+{re.escape(suffix)})['\"]\s*;?"
+    for match in re.finditer(pattern, text):
+        imports[match.group(1)] = match.group(2)
+    return imports
+
+
+def resolve_ts_import_path(source_path: Path, import_path: str) -> Path | None:
+    path = (source_path.parent / Path(import_path)).resolve()
+    return path if path.exists() else None
+
+
 def resolve_preset_build_path(spec_dir: Path, preset_const: str) -> Path | None:
     presets_path = spec_dir / "presets.ts"
     if not presets_path.exists():
         return None
     text = presets_path.read_text(encoding="utf-8")
-    imports: dict[str, str] = {}
-    for match in re.finditer(r"import\s+(\w+)\s+from\s+['\"]([^'\"]+\.build\.json)['\"]\s*;", text):
-        imports[match.group(1)] = match.group(2)
+    imports = ts_json_imports(presets_path, ".build.json")
 
     export_pattern = re.compile(
         rf"export\s+const\s+{re.escape(preset_const)}\s*=\s*PresetUtils\.makePresetBuildFromJSON\((.*?)\);",
@@ -1598,8 +1612,78 @@ def resolve_preset_build_path(spec_dir: Path, preset_const: str) -> Path | None:
     import_path = imports.get(build_arg.group(1))
     if not import_path:
         return None
-    path = (presets_path.parent / Path(import_path)).resolve()
-    return path if path.exists() else None
+    return resolve_ts_import_path(presets_path, import_path)
+
+
+def resolve_preset_gear_path(spec_dir: Path, preset_const: str) -> Path | None:
+    presets_path = spec_dir / "presets.ts"
+    if not presets_path.exists():
+        return None
+    text = presets_path.read_text(encoding="utf-8")
+    imports = ts_json_imports(presets_path, ".gear.json")
+
+    export_pattern = re.compile(
+        rf"export\s+const\s+{re.escape(preset_const)}\s*=\s*PresetUtils\.makePresetGear\((.*?)\);",
+        flags=re.DOTALL,
+    )
+    export_match = export_pattern.search(text)
+    if not export_match:
+        return None
+    body = export_match.group(1)
+    gear_arg = re.search(r",\s*(\w+)\s*(?:,|$)", body.strip())
+    if not gear_arg:
+        return None
+    import_path = imports.get(gear_arg.group(1))
+    if not import_path:
+        return None
+    return resolve_ts_import_path(presets_path, import_path)
+
+
+def default_gear_path_from_sim(spec_dir: Path, sim_text: str) -> Path | None:
+    default_gear = re.search(r"defaults\s*:\s*\{[\s\S]*?gear\s*:\s*Presets\.(\w+)\.gear", sim_text)
+    if not default_gear:
+        return None
+    return resolve_preset_gear_path(spec_dir, default_gear.group(1))
+
+
+def preset_build_consts_from_sim(sim_text: str) -> list[str]:
+    builds = re.search(r"builds\s*:\s*\[(.*?)\]", sim_text, flags=re.DOTALL)
+    if not builds:
+        return []
+    return re.findall(r"Presets\.(\w+)", builds.group(1))
+
+
+def normalized_equipment_for_match(equipment: Any) -> dict[str, Any]:
+    return normalize_equipment_spec(equipment)
+
+
+def build_matches_default_gear(build_path: Path, default_gear: Mapping[str, Any]) -> bool:
+    build = read_json_file(build_path)
+    if not isinstance(build, Mapping):
+        return False
+    player = build.get("player")
+    if not isinstance(player, Mapping):
+        return False
+    equipment = player.get("equipment")
+    if not isinstance(equipment, Mapping):
+        return False
+    return normalized_equipment_for_match(equipment) == normalized_equipment_for_match(default_gear)
+
+
+def resolve_build_matching_default_gear(spec_dir: Path, sim_text: str) -> Path | None:
+    gear_path = default_gear_path_from_sim(spec_dir, sim_text)
+    if gear_path is None:
+        return None
+    default_gear = read_json_file(gear_path)
+    if not isinstance(default_gear, Mapping):
+        return None
+
+    matches: list[Path] = []
+    for build_const in preset_build_consts_from_sim(sim_text):
+        build_path = resolve_preset_build_path(spec_dir, build_const)
+        if build_path is not None and build_matches_default_gear(build_path, default_gear):
+            matches.append(build_path)
+    return matches[0] if len(matches) == 1 else None
 
 
 def official_default_build_path(mop_dir: Path, spec_field: str) -> Path | None:
@@ -1617,6 +1701,9 @@ def official_default_build_path(mop_dir: Path, spec_field: str) -> Path | None:
             resolved = resolve_preset_build_path(spec_dir, default_build.group(1))
             if resolved is not None:
                 return resolved
+        resolved = resolve_build_matching_default_gear(spec_dir, sim_text)
+        if resolved is not None:
+            return resolved
 
     build_dir = spec_dir / "builds"
     build_files = sorted(build_dir.glob("*.build.json")) if build_dir.exists() else []
