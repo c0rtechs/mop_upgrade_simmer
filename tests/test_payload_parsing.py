@@ -368,6 +368,31 @@ class PayloadParsingTests(unittest.TestCase):
         self.assertEqual(request["raid"]["num_active_parties"], 2)
         self.assertEqual(len(request["raid"]["parties"]), 2)
 
+    def test_input_context_preserves_individual_settings_ep_weights(self):
+        settings = {
+            "player": {
+                "name": "Example",
+                "class": "ClassMonk",
+                "race": "RaceOrc",
+                "brewmaster_monk": {"options": {"class_options": {}}},
+                "equipment": {"items": [{"id": 1}]},
+            },
+            "settings": {"iterations": 500},
+            "epWeightsStats": {"stats": [1.0, 2.0], "pseudoStats": [3.0]},
+        }
+
+        context = runner.build_input_context_from_payload(
+            "individual_settings",
+            settings,
+            Path("unused-wowsimcli"),
+            Path("unused-out"),
+            250,
+        )
+
+        self.assertEqual(context.request["sim_options"], {"iterations": 250})
+        self.assertEqual(context.ep_weights_stats, {"stats": [1.0, 2.0], "pseudoStats": [3.0]})
+        self.assertEqual(context.ep_weights_source, "input IndividualSimSettings")
+
     def test_wse_only_build_uses_official_default_build_before_injection(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

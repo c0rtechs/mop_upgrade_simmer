@@ -21,6 +21,10 @@ The known hard parts are intentionally isolated:
 5. Inspect item database generation/assets for `UIDatabase`, `UIItem`, `UIItemSource`, `UINPC`, and `UIZone` to identify the most reliable local source data file.
 6. Check whether current MoP backend has `RunBulkSimAsync`, `BulkSimRequest`, or analogous APIs hidden outside `wowsimcli`; if it does, expose a CLI command instead of running thousands of separate processes.
 
+## High priority
+
+- [ ] For upgrade sims only (option 3 in the interactive script flow), automatically include items that the WoWSims frontend classifies as EP upgrades for the current gearset. This must use the frontend's own EP upgrade classification logic/data, or an explicitly equivalent implementation, rather than local item-level/stat heuristics.
+
 ## Implementation tasks
 
 - [ ] Replace all heuristic WSE -> request conversion with the same mapping used by the official UI importer.

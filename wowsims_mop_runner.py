@@ -352,6 +352,39 @@ QUALITY_NAMES = {
     7: "ItemQualityHeirloom",
 }
 
+PSEUDO_STAT_MAIN_HAND_DPS = 0
+PSEUDO_STAT_OFF_HAND_DPS = 1
+PSEUDO_STAT_RANGED_DPS = 2
+
+GEM_COLOR_META = 1
+GEM_COLOR_RED = 2
+GEM_COLOR_BLUE = 3
+GEM_COLOR_YELLOW = 4
+GEM_COLOR_GREEN = 5
+GEM_COLOR_ORANGE = 6
+GEM_COLOR_PURPLE = 7
+GEM_COLOR_PRISMATIC = 8
+GEM_COLOR_COGWHEEL = 9
+GEM_COLOR_SHA_TOUCHED = 10
+SPECIAL_GEM_COLORS = {GEM_COLOR_META, GEM_COLOR_COGWHEEL, GEM_COLOR_SHA_TOUCHED}
+SOCKET_TO_MATCHING_GEM_COLORS = {
+    GEM_COLOR_META: {GEM_COLOR_META},
+    GEM_COLOR_BLUE: {GEM_COLOR_BLUE, GEM_COLOR_PURPLE, GEM_COLOR_GREEN, GEM_COLOR_PRISMATIC},
+    GEM_COLOR_RED: {GEM_COLOR_RED, GEM_COLOR_PURPLE, GEM_COLOR_ORANGE, GEM_COLOR_PRISMATIC},
+    GEM_COLOR_YELLOW: {GEM_COLOR_YELLOW, GEM_COLOR_ORANGE, GEM_COLOR_GREEN, GEM_COLOR_PRISMATIC},
+    GEM_COLOR_PRISMATIC: {
+        GEM_COLOR_RED,
+        GEM_COLOR_ORANGE,
+        GEM_COLOR_YELLOW,
+        GEM_COLOR_GREEN,
+        GEM_COLOR_BLUE,
+        GEM_COLOR_PURPLE,
+        GEM_COLOR_PRISMATIC,
+    },
+    GEM_COLOR_COGWHEEL: {GEM_COLOR_COGWHEEL},
+    GEM_COLOR_SHA_TOUCHED: {GEM_COLOR_SHA_TOUCHED},
+}
+
 DIFFICULTY_NAMES = {
     0: "Unknown",
     1: "Normal",
@@ -673,6 +706,20 @@ class PlayerContext:
         return self.spec_enum == "SpecFuryWarrior"
 
 
+@dataclasses.dataclass(frozen=True)
+class InputContext:
+    request: dict[str, Any]
+    ep_weights_stats: dict[str, Any] | None = None
+    ep_weights_source: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class FrontendEPData:
+    gems: tuple[dict[str, Any], ...] = ()
+    random_suffixes: Mapping[int, dict[str, Any]] = dataclasses.field(default_factory=dict)
+    reforge_stats: tuple[dict[str, Any], ...] = ()
+
+
 @dataclasses.dataclass
 class SimRunResult:
     label: str
@@ -781,6 +828,15 @@ def as_int(value: Any) -> int | None:
         return None
 
 
+def as_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def enum_name(value: Any, names: Mapping[int, str], default: str = "") -> str:
     if value is None or value == "":
         return default
@@ -802,6 +858,25 @@ def first_present(mapping: Mapping[str, Any], *keys: str) -> Any:
         if key in mapping and mapping[key] is not None:
             return mapping[key]
     return None
+
+
+def numeric_stat_map(value: Any) -> dict[int, float]:
+    if isinstance(value, Mapping):
+        out: dict[int, float] = {}
+        for key, raw in value.items():
+            idx = as_int(key)
+            num = as_float(raw)
+            if idx is not None and num is not None:
+                out[idx] = num
+        return out
+    if isinstance(value, list):
+        out = {}
+        for idx, raw in enumerate(value):
+            num = as_float(raw)
+            if num is not None:
+                out[idx] = num
+        return out
+    return {}
 
 
 def write_json_file(path: Path, data: Any, pretty: bool = True) -> None:
@@ -1810,6 +1885,73 @@ def official_default_settings_for_wse_character(mop_dir: Path, character: dict[s
     return settings
 
 
+def extract_ep_weights_stats(settings: Mapping[str, Any]) -> dict[str, Any] | None:
+    raw = first_present(settings, "epWeightsStats", "ep_weights_stats")
+    if not isinstance(raw, Mapping):
+        return None
+    return copy.deepcopy(dict(raw))
+
+
+def build_input_context_from_payload(
+    kind: str,
+    payload: Any,
+    wowsimcli: Path,
+    out_dir: Path,
+    iterations: int,
+    template_blob: str = "",
+    glyph_spell_to_item: Mapping[int, int] | None = None,
+    mop_dir: Path | None = None,
+) -> InputContext:
+    if kind == "raid_request":
+        req = copy.deepcopy(payload)
+        set_iterations(req, iterations)
+        return InputContext(request=req)
+    if kind == "individual_settings":
+        ep_weights_stats = extract_ep_weights_stats(payload)
+        return InputContext(
+            request=convert_individual_settings_to_raid_request(payload, iterations=iterations),
+            ep_weights_stats=ep_weights_stats,
+            ep_weights_source="input IndividualSimSettings" if ep_weights_stats else "",
+        )
+    if kind != "wse_character":
+        die(f"Cannot build a RaidSimRequest from payload kind {kind!r}.")
+
+    template_blob = template_blob.strip()
+    if template_blob:
+        t_kind, t_payload = load_user_payload(template_blob, wowsimcli, out_dir)
+        ep_weights_stats: dict[str, Any] | None = None
+        ep_weights_source = ""
+        if t_kind == "individual_settings":
+            base = convert_individual_settings_to_raid_request(t_payload, iterations=iterations)
+            ep_weights_stats = extract_ep_weights_stats(t_payload)
+            if ep_weights_stats:
+                ep_weights_source = "template IndividualSimSettings"
+        elif t_kind == "raid_request":
+            base = copy.deepcopy(t_payload)
+            set_iterations(base, iterations)
+        else:
+            die(f"Template/share-link input must decode to IndividualSimSettings or RaidSimRequest, got {t_kind!r}.")
+        return InputContext(
+            request=inject_wse_character_into_request(base, payload, iterations=iterations, glyph_spell_to_item=glyph_spell_to_item),
+            ep_weights_stats=ep_weights_stats,
+            ep_weights_source=ep_weights_source,
+        )
+
+    if mop_dir is None:
+        die(
+            "No WoWSims template/share link was provided and no MoP repo path was available to load official defaults. "
+            "Provide --template or call minimal_request_from_wse_character() explicitly for diagnostic-only requests."
+        )
+    settings = official_default_settings_for_wse_character(mop_dir, payload)
+    base = convert_individual_settings_to_raid_request(settings, iterations=iterations)
+    ep_weights_stats = extract_ep_weights_stats(settings)
+    return InputContext(
+        request=inject_wse_character_into_request(base, payload, iterations=iterations, glyph_spell_to_item=glyph_spell_to_item),
+        ep_weights_stats=ep_weights_stats,
+        ep_weights_source="official default IndividualSimSettings" if ep_weights_stats else "",
+    )
+
+
 def build_request_from_payload(
     kind: str,
     payload: Any,
@@ -1820,35 +1962,16 @@ def build_request_from_payload(
     glyph_spell_to_item: Mapping[int, int] | None = None,
     mop_dir: Path | None = None,
 ) -> dict[str, Any]:
-    if kind == "raid_request":
-        req = copy.deepcopy(payload)
-        set_iterations(req, iterations)
-        return req
-    if kind == "individual_settings":
-        return convert_individual_settings_to_raid_request(payload, iterations=iterations)
-    if kind != "wse_character":
-        die(f"Cannot build a RaidSimRequest from payload kind {kind!r}.")
-
-    template_blob = template_blob.strip()
-    if template_blob:
-        t_kind, t_payload = load_user_payload(template_blob, wowsimcli, out_dir)
-        if t_kind == "individual_settings":
-            base = convert_individual_settings_to_raid_request(t_payload, iterations=iterations)
-        elif t_kind == "raid_request":
-            base = copy.deepcopy(t_payload)
-            set_iterations(base, iterations)
-        else:
-            die(f"Template/share-link input must decode to IndividualSimSettings or RaidSimRequest, got {t_kind!r}.")
-        return inject_wse_character_into_request(base, payload, iterations=iterations, glyph_spell_to_item=glyph_spell_to_item)
-
-    if mop_dir is None:
-        die(
-            "No WoWSims template/share link was provided and no MoP repo path was available to load official defaults. "
-            "Provide --template or call minimal_request_from_wse_character() explicitly for diagnostic-only requests."
-        )
-    settings = official_default_settings_for_wse_character(mop_dir, payload)
-    base = convert_individual_settings_to_raid_request(settings, iterations=iterations)
-    return inject_wse_character_into_request(base, payload, iterations=iterations, glyph_spell_to_item=glyph_spell_to_item)
+    return build_input_context_from_payload(
+        kind,
+        payload,
+        wowsimcli,
+        out_dir,
+        iterations,
+        template_blob=template_blob,
+        glyph_spell_to_item=glyph_spell_to_item,
+        mop_dir=mop_dir,
+    ).request
 
 
 def set_iterations(request: dict[str, Any], iterations: int | None) -> None:
@@ -2123,6 +2246,255 @@ def richer_meta(candidate: ItemMeta, existing: ItemMeta) -> bool:
     score_candidate = sum(bool(getattr(candidate, f)) for f in ("name", "type", "armor_type", "weapon_type", "hand_type", "ilvl")) + len(candidate.sources)
     score_existing = sum(bool(getattr(existing, f)) for f in ("name", "type", "armor_type", "weapon_type", "hand_type", "ilvl")) + len(existing.sources)
     return score_candidate > score_existing
+
+
+def load_frontend_ep_data(mop_dir: Path) -> FrontendEPData:
+    gems: dict[int, dict[str, Any]] = {}
+    random_suffixes: dict[int, dict[str, Any]] = {}
+    reforge_stats: dict[int, dict[str, Any]] = {}
+    for path in canonical_db_paths(mop_dir):
+        if not path.exists():
+            continue
+        data = read_json_file(path)
+        if not isinstance(data, Mapping):
+            continue
+        for gem in data.get("gems", []) or []:
+            if isinstance(gem, dict) and as_int(gem.get("id")) is not None:
+                gems[int(gem["id"])] = gem
+        for suffix in data.get("randomSuffixes", data.get("random_suffixes", [])) or []:
+            if isinstance(suffix, dict) and as_int(suffix.get("id")) is not None:
+                random_suffixes[int(suffix["id"])] = suffix
+        for reforge in data.get("reforgeStats", data.get("reforge_stats", [])) or []:
+            if isinstance(reforge, dict) and as_int(reforge.get("id")) is not None:
+                reforge_stats[int(reforge["id"])] = reforge
+    return FrontendEPData(
+        gems=tuple(gems[item_id] for item_id in sorted(gems)),
+        random_suffixes={item_id: random_suffixes[item_id] for item_id in sorted(random_suffixes)},
+        reforge_stats=tuple(reforge_stats[item_id] for item_id in sorted(reforge_stats)),
+    )
+
+
+def unit_stats_weight_maps(ep_weights: Mapping[str, Any] | None) -> tuple[dict[int, float], dict[int, float]]:
+    if not isinstance(ep_weights, Mapping):
+        return {}, {}
+    return (
+        numeric_stat_map(first_present(ep_weights, "stats", "Stats") or []),
+        numeric_stat_map(first_present(ep_weights, "pseudoStats", "pseudo_stats", "PseudoStats") or []),
+    )
+
+
+def has_nonzero_ep_weights(ep_weights: Mapping[str, Any] | None) -> bool:
+    stat_weights, pseudo_weights = unit_stats_weight_maps(ep_weights)
+    return any(value != 0 for value in itertools.chain(stat_weights.values(), pseudo_weights.values()))
+
+
+def compute_frontend_stats_ep(
+    stats: Mapping[int, float] | None,
+    pseudo_stats: Mapping[int, float] | None,
+    ep_weights: Mapping[str, Any],
+) -> float:
+    stat_weights, pseudo_weights = unit_stats_weight_maps(ep_weights)
+    total = 0.0
+    for idx, value in (stats or {}).items():
+        total += value * stat_weights.get(idx, 0.0)
+    for idx, value in (pseudo_stats or {}).items():
+        total += value * pseudo_weights.get(idx, 0.0)
+    return total
+
+
+def frontend_scaling_option(item: Mapping[str, Any], upgrade_step: int = 0) -> Mapping[str, Any]:
+    options = item.get("scalingOptions") or item.get("scaling_options") or {}
+    if not isinstance(options, Mapping):
+        return {}
+    for key, value in options.items():
+        if as_int(key) == upgrade_step and isinstance(value, Mapping):
+            return value
+    return {}
+
+
+def frontend_item_base_stats(meta: ItemMeta, slot_idx: int) -> tuple[dict[int, float], dict[int, float], float]:
+    raw = meta.raw if isinstance(meta.raw, Mapping) else {}
+    scaling = frontend_scaling_option(raw, 0)
+    stats = numeric_stat_map(first_present(scaling, "stats", "Stats") or first_present(raw, "stats", "Stats") or [])
+    pseudo_stats: dict[int, float] = {}
+    rand_prop_points = as_float(first_present(scaling, "randPropPoints", "rand_prop_points")) or as_float(
+        first_present(raw, "randPropPoints", "rand_prop_points")
+    ) or 0.0
+
+    weapon_speed = as_float(first_present(raw, "weaponSpeed", "weapon_speed")) or 0.0
+    damage_min = as_float(first_present(scaling, "weaponDamageMin", "weapon_damage_min") or first_present(raw, "weaponDamageMin", "weapon_damage_min"))
+    damage_max = as_float(first_present(scaling, "weaponDamageMax", "weapon_damage_max") or first_present(raw, "weaponDamageMax", "weapon_damage_max"))
+    if weapon_speed > 0 and damage_min is not None and damage_max is not None:
+        weapon_dps = (damage_min + damage_max) / 2.0 / weapon_speed
+        if slot_idx == 14:
+            pseudo_idx = PSEUDO_STAT_RANGED_DPS if meta.ranged_weapon_type and meta.ranged_weapon_type != "RangedWeaponTypeUnknown" else PSEUDO_STAT_MAIN_HAND_DPS
+            pseudo_stats[pseudo_idx] = pseudo_stats.get(pseudo_idx, 0.0) + weapon_dps
+        elif slot_idx == 15:
+            pseudo_stats[PSEUDO_STAT_OFF_HAND_DPS] = pseudo_stats.get(PSEUDO_STAT_OFF_HAND_DPS, 0.0) + weapon_dps
+    return stats, pseudo_stats, rand_prop_points
+
+
+def gem_color_matches_socket(gem_color: int, socket_color: int) -> bool:
+    return gem_color == socket_color or gem_color in SOCKET_TO_MATCHING_GEM_COLORS.get(socket_color, set())
+
+
+def gem_eligible_for_socket(gem: Mapping[str, Any], socket_color: int) -> bool:
+    gem_color = as_int(first_present(gem, "color", "gemColor", "gem_color")) or 0
+    if socket_color == GEM_COLOR_META:
+        return gem_color == GEM_COLOR_META
+    if socket_color == GEM_COLOR_COGWHEEL:
+        return gem_color == GEM_COLOR_COGWHEEL
+    if socket_color == GEM_COLOR_SHA_TOUCHED:
+        return gem_color == GEM_COLOR_SHA_TOUCHED
+    return gem_color not in SPECIAL_GEM_COLORS
+
+
+def gem_matches_socket(gem: Mapping[str, Any], socket_color: int) -> bool:
+    gem_color = as_int(first_present(gem, "color", "gemColor", "gem_color")) or 0
+    return gem_color_matches_socket(gem_color, socket_color)
+
+
+def profession_is_unknown(value: Any) -> bool:
+    profession = enum_name(value, PROFESSION_NAMES, "ProfessionUnknown")
+    return profession in {"", "ProfessionUnknown"}
+
+
+def frontend_gem_is_unrestricted(gem: Mapping[str, Any], phase: int | None) -> bool:
+    gem_phase = as_int(first_present(gem, "phase"))
+    return (
+        not bool(first_present(gem, "unique"))
+        and profession_is_unknown(first_present(gem, "requiredProfession", "required_profession"))
+        and (phase is None or gem_phase is None or gem_phase <= phase)
+    )
+
+
+def frontend_compute_gem_ep(gem: Mapping[str, Any], ep_weights: Mapping[str, Any]) -> float:
+    ep = compute_frontend_stats_ep(numeric_stat_map(first_present(gem, "stats", "Stats") or []), {}, ep_weights)
+    if bool(first_present(gem, "unique")):
+        ep -= 0.01
+    return ep
+
+
+def frontend_gems_for_socket(ep_data: FrontendEPData, socket_color: int, phase: int | None) -> list[dict[str, Any]]:
+    return [
+        gem
+        for gem in ep_data.gems
+        if gem_eligible_for_socket(gem, socket_color) and frontend_gem_is_unrestricted(gem, phase)
+    ]
+
+
+def frontend_compute_item_ep(
+    meta: ItemMeta,
+    slot_idx: int,
+    ep_weights: Mapping[str, Any],
+    ep_data: FrontendEPData | None,
+    phase: int | None,
+) -> float | None:
+    if not has_nonzero_ep_weights(ep_weights):
+        return None
+    ep_data = ep_data or FrontendEPData()
+    raw = meta.raw if isinstance(meta.raw, Mapping) else {}
+    stats, pseudo_stats, rand_prop_points = frontend_item_base_stats(meta, slot_idx)
+    ep = compute_frontend_stats_ep(stats, pseudo_stats, ep_weights)
+
+    suffix_eps: list[float] = []
+    for suffix_id_raw in first_present(raw, "randomSuffixOptions", "random_suffix_options") or []:
+        suffix_id = as_int(suffix_id_raw)
+        suffix = ep_data.random_suffixes.get(suffix_id or 0)
+        if suffix:
+            suffix_eps.append(compute_frontend_stats_ep(numeric_stat_map(first_present(suffix, "stats", "Stats") or []), {}, ep_weights))
+    if suffix_eps:
+        ep += (max(suffix_eps) * rand_prop_points) / 10000.0
+
+    reforge_eps: list[float] = []
+    for reforge in ep_data.reforge_stats:
+        from_stat = as_int(first_present(reforge, "fromStat", "from_stat"))
+        to_stat = as_int(first_present(reforge, "toStat", "to_stat"))
+        multiplier = as_float(first_present(reforge, "multiplier"))
+        if from_stat is None or to_stat is None or multiplier is None:
+            continue
+        from_value = stats.get(from_stat, 0.0)
+        if from_value > 0 and stats.get(to_stat, 0.0) == 0:
+            reforge_stats = {
+                from_stat: math.ceil(-from_value * multiplier),
+                to_stat: math.floor(from_value * multiplier),
+            }
+            reforge_eps.append(compute_frontend_stats_ep(reforge_stats, {}, ep_weights))
+    if reforge_eps:
+        ep += max(reforge_eps)
+
+    if meta.unique:
+        ep -= 0.01
+
+    socket_colors = [color for color in (as_int(raw_color) for raw_color in first_present(raw, "gemSockets", "gem_sockets") or []) if color is not None]
+    if socket_colors:
+        best_not_matching = 0.0
+        best_matching = 0.0
+        for socket_color in socket_colors:
+            socket_gems = frontend_gems_for_socket(ep_data, socket_color, phase)
+            if socket_gems:
+                best_not_matching += max(frontend_compute_gem_ep(gem, ep_weights) for gem in socket_gems)
+            matching_gems = [gem for gem in socket_gems if gem_matches_socket(gem, socket_color)]
+            if matching_gems:
+                best_matching += max(frontend_compute_gem_ep(gem, ep_weights) for gem in matching_gems)
+        best_matching += compute_frontend_stats_ep(numeric_stat_map(first_present(raw, "socketBonus", "socket_bonus") or []), {}, ep_weights)
+        ep += max(best_matching, best_not_matching)
+
+    return ep
+
+
+def frontend_ep_upgrade_specs(
+    request: dict[str, Any],
+    item_index: Mapping[int, ItemMeta],
+    ep_weights: Mapping[str, Any] | None,
+    ep_data: FrontendEPData | None,
+    min_ilvl: int | None,
+    max_ilvl: int | None,
+    phase: int | None,
+) -> list[dict[str, Any]]:
+    if not has_nonzero_ep_weights(ep_weights):
+        return []
+
+    context = player_context_from_request(request)
+    equipped_ids = {int(item.get("id")) for item in request_equipment_items(request) if isinstance(item, dict) and item.get("id")}
+    equipped_by_slot = equipped_item_meta_by_slot(request, item_index)
+    equipped_ep_by_slot: dict[int, float] = {}
+    for slot_idx, meta in equipped_by_slot.items():
+        ep = frontend_compute_item_ep(meta, slot_idx, ep_weights, ep_data, phase)
+        if ep is not None:
+            equipped_ep_by_slot[slot_idx] = ep
+
+    scored: list[tuple[float, int, int, dict[str, Any]]] = []
+    for item_id, meta in item_index.items():
+        if item_id in equipped_ids:
+            continue
+        if min_ilvl is not None and meta.ilvl is not None and meta.ilvl < min_ilvl:
+            continue
+        if max_ilvl is not None and meta.ilvl is not None and meta.ilvl > max_ilvl:
+            continue
+        ok, _reason = is_item_in_phase(meta, phase)
+        if not ok:
+            continue
+        ok, _reason = is_item_usable(meta, context.class_enum, set(context.professions), faction=context.faction)
+        if not ok:
+            continue
+        slots, _reason = eligible_slot_indexes_for_item(meta, {"id": item_id}, context, equipped_by_slot)
+        if not slots:
+            continue
+
+        best_delta: float | None = None
+        for slot_idx in slots:
+            candidate_ep = frontend_compute_item_ep(meta, slot_idx, ep_weights, ep_data, phase)
+            if candidate_ep is None:
+                continue
+            delta = candidate_ep - equipped_ep_by_slot.get(slot_idx, 0.0)
+            if delta > 0 and (best_delta is None or delta > best_delta):
+                best_delta = delta
+        if best_delta is not None:
+            scored.append((best_delta, meta.ilvl or 0, item_id, {"id": item_id}))
+
+    scored.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
+    return [spec for _delta, _ilvl, _item_id, spec in scored]
 
 
 def item_name(item_id: int, item_index: Mapping[int, ItemMeta]) -> str:
@@ -2624,6 +2996,9 @@ def build_candidate_specs(
     min_ilvl: int | None,
     max_ilvl: int | None,
     phase: int | None = None,
+    auto_frontend_ep_upgrades: bool = False,
+    frontend_ep_weights: Mapping[str, Any] | None = None,
+    frontend_ep_data: FrontendEPData | None = None,
 ) -> tuple[list[dict[str, Any]], list[SkippedItem]]:
     equipped_ids = {int(item.get("id")) for item in request_equipment_items(request) if isinstance(item, dict) and item.get("id")}
     context = player_context_from_request(request)
@@ -2640,6 +3015,25 @@ def build_candidate_specs(
             if not item_id or item_id in equipped_ids:
                 continue
             candidates[item_id] = spec
+
+    if auto_frontend_ep_upgrades and frontend_ep_weights:
+        ep_specs = frontend_ep_upgrade_specs(
+            request,
+            item_index,
+            frontend_ep_weights,
+            frontend_ep_data,
+            min_ilvl=min_ilvl,
+            max_ilvl=max_ilvl,
+            phase=phase,
+        )
+        added = 0
+        for spec in ep_specs:
+            item_id = int(spec.get("id") or 0)
+            if item_id and item_id not in equipped_ids and item_id not in candidates:
+                candidates[item_id] = spec
+                added += 1
+        if added:
+            info(f"Automatically included {added:,} frontend EP upgrade candidate items.")
 
     if source_mode in {"db", "both"}:
         db_items: list[tuple[int, ItemMeta]] = list(item_index.items())
@@ -3163,10 +3557,32 @@ def run_normal(args: argparse.Namespace, wowsimcli: Path, request: dict[str, Any
         die(f"Sim failed: {result.error}")
 
 
-def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:
+def run_upgrade(
+    args: argparse.Namespace,
+    paths: RunnerPaths,
+    wowsimcli: Path,
+    request: dict[str, Any],
+    out_dir: Path,
+    ep_weights_stats: Mapping[str, Any] | None = None,
+    ep_weights_source: str = "",
+) -> None:
     item_index = load_item_index(paths.mop, paths.cache, refresh=args.refresh_item_index)
     bag_kind, bag_payload = prompt_bag_payload(args, wowsimcli, out_dir)
     phase = effective_phase(args, request)
+    frontend_ep_data: FrontendEPData | None = None
+    auto_frontend_ep_upgrades = False
+    if getattr(args, "no_auto_ep_upgrades", False):
+        info("Automatic frontend EP upgrade inclusion is disabled by --no-auto-ep-upgrades.")
+    elif ep_weights_stats and has_nonzero_ep_weights(ep_weights_stats):
+        frontend_ep_data = load_frontend_ep_data(paths.mop)
+        auto_frontend_ep_upgrades = True
+        source = f" from {ep_weights_source}" if ep_weights_source else ""
+        info(f"Automatic frontend EP upgrade inclusion is enabled{source}.")
+    else:
+        warn(
+            "Skipping automatic frontend EP upgrade inclusion because no nonzero EP weights were available. "
+            "Provide a WoWSims share link or IndividualSimSettings JSON exported with UI settings to enable it."
+        )
     candidates, skipped = build_candidate_specs(
         request,
         bag_kind,
@@ -3177,6 +3593,9 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
         min_ilvl=args.min_ilvl,
         max_ilvl=args.max_ilvl,
         phase=phase,
+        auto_frontend_ep_upgrades=auto_frontend_ep_upgrades,
+        frontend_ep_weights=ep_weights_stats,
+        frontend_ep_data=frontend_ep_data,
     )
     skipped_csv = out_dir / "skipped_items.csv" if skipped else None
     if skipped_csv is not None:
@@ -3331,6 +3750,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--upgrade-candidate-source", choices=["bag", "db", "both"], default="bag", help="Where upgrade candidates come from.")
     parser.add_argument("--max-db-candidates", type=int, default=250, help="Max DB candidates when --upgrade-candidate-source includes db. 0 = no cap.")
     parser.add_argument("--max-upgrade-sims", type=int, default=0, help="Max single-swap upgrade sim jobs. 0 = no cap.")
+    parser.add_argument("--no-auto-ep-upgrades", action="store_true", help="Disable automatic frontend EP upgrade inclusion in upgrade mode.")
     parser.add_argument("--max-batch-combinations", type=int, default=10000, help="Max batch combinations. 0 = no cap.")
     parser.add_argument("--min-ilvl", type=int, default=None, help="Minimum item level for DB candidates.")
     parser.add_argument("--max-ilvl", type=int, default=None, help="Maximum item level for DB candidates.")
@@ -3414,7 +3834,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         die(f"Unknown mode {mode!r}")
 
     template_blob = maybe_prompt_template(kind, args)
-    request = build_request_from_payload(
+    input_context = build_input_context_from_payload(
         kind,
         payload,
         wowsimcli,
@@ -3424,14 +3844,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         glyph_spell_to_item=glyph_spell_to_item,
         mop_dir=paths.mop,
     )
+    request = input_context.request
     write_json_file(out_dir / "effective_raid_sim_request.json", request)
+    if input_context.ep_weights_stats:
+        write_json_file(out_dir / "effective_ep_weights_stats.json", input_context.ep_weights_stats)
 
     if mode == "normal":
         run_normal(args, wowsimcli, request, out_dir)
     elif mode == "batch":
         run_batch(args, paths, wowsimcli, request, out_dir)
     elif mode == "upgrade":
-        run_upgrade(args, paths, wowsimcli, request, out_dir)
+        run_upgrade(
+            args,
+            paths,
+            wowsimcli,
+            request,
+            out_dir,
+            ep_weights_stats=input_context.ep_weights_stats,
+            ep_weights_source=input_context.ep_weights_source,
+        )
     info(f"Output folder: {out_dir}")
     return 0
 

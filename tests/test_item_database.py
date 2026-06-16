@@ -327,6 +327,115 @@ class CanonicalItemDatabaseTests(unittest.TestCase):
 
         self.assertEqual([slot for _label, _req, slot, _slot_name in replacements], [12])
 
+    def test_frontend_ep_upgrades_are_auto_included_from_db_when_enabled(self):
+        request = request_for_player(
+            "ClassWarrior",
+            spec_field="arms_warrior",
+            items=[{} for _ in range(12)],
+        )
+        request["raid"]["parties"][0]["players"][0]["equipment"]["items"][10] = {"id": 10}
+        request["raid"]["parties"][0]["players"][0]["equipment"]["items"][11] = {"id": 13}
+        db = {
+            10: runner.ItemMeta(
+                id=10,
+                name="Current Ring",
+                type="ItemTypeFinger",
+                raw={
+                    "id": 10,
+                    "name": "Current Ring",
+                    "type": 11,
+                    "scalingOptions": {"0": {"stats": {"0": 10}, "ilvl": 100}},
+                },
+            ),
+            13: runner.ItemMeta(
+                id=13,
+                name="Other Current Ring",
+                type="ItemTypeFinger",
+                raw={
+                    "id": 13,
+                    "name": "Other Current Ring",
+                    "type": 11,
+                    "scalingOptions": {"0": {"stats": {"0": 10}, "ilvl": 100}},
+                },
+            ),
+            11: runner.ItemMeta(
+                id=11,
+                name="EP Upgrade Ring",
+                type="ItemTypeFinger",
+                raw={
+                    "id": 11,
+                    "name": "EP Upgrade Ring",
+                    "type": 11,
+                    "scalingOptions": {"0": {"stats": {"0": 12}, "ilvl": 101}},
+                },
+            ),
+            12: runner.ItemMeta(
+                id=12,
+                name="EP Downgrade Ring",
+                type="ItemTypeFinger",
+                raw={
+                    "id": 12,
+                    "name": "EP Downgrade Ring",
+                    "type": 11,
+                    "scalingOptions": {"0": {"stats": {"0": 9}, "ilvl": 102}},
+                },
+            ),
+        }
+
+        candidates, skipped = runner.build_candidate_specs(
+            request,
+            "none",
+            None,
+            db,
+            source_mode="bag",
+            max_db_candidates=0,
+            min_ilvl=None,
+            max_ilvl=None,
+            auto_frontend_ep_upgrades=True,
+            frontend_ep_weights={"stats": [1.0]},
+        )
+
+        self.assertEqual(skipped, [])
+        self.assertEqual(candidates, [{"id": 11}])
+
+    def test_frontend_ep_upgrades_are_not_auto_included_when_disabled(self):
+        request = request_for_player(
+            "ClassWarrior",
+            spec_field="arms_warrior",
+            items=[{} for _ in range(12)],
+        )
+        request["raid"]["parties"][0]["players"][0]["equipment"]["items"][10] = {"id": 10}
+        db = {
+            10: runner.ItemMeta(
+                id=10,
+                name="Current Ring",
+                type="ItemTypeFinger",
+                raw={"scalingOptions": {"0": {"stats": {"0": 10}, "ilvl": 100}}},
+            ),
+            11: runner.ItemMeta(
+                id=11,
+                name="EP Upgrade Ring",
+                type="ItemTypeFinger",
+                raw={"scalingOptions": {"0": {"stats": {"0": 12}, "ilvl": 101}}},
+            ),
+        }
+
+        candidates, skipped = runner.build_candidate_specs(
+            request,
+            "none",
+            None,
+            db,
+            source_mode="bag",
+            max_db_candidates=0,
+            min_ilvl=None,
+            max_ilvl=None,
+            auto_frontend_ep_upgrades=False,
+            frontend_ep_weights={"stats": [1.0]},
+        )
+
+        self.assertEqual(skipped, [])
+        self.assertEqual(candidates, [])
+
 
 if __name__ == "__main__":
     unittest.main()

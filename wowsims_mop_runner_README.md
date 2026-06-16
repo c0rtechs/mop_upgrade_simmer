@@ -45,11 +45,11 @@ On first run, it will create:
 
 2. Copy the exporter string.
 3. Start the script and paste the WSE export when prompted.
-4. When prompted for a WoWSims template/share link, provide a known-good WoWSims share link or `RaidSimRequest` JSON for the same class/spec when you want an exact UI configuration. If no template is provided, the runner loads an official default build JSON from the checked-out `wowsims/mop` UI files when one can be resolved for the exported spec. If no official default build is available, it fails closed instead of inventing sim settings.
+4. When prompted for a WoWSims template/share link, provide a known-good WoWSims share link or `RaidSimRequest` JSON for the same class/spec when you want an exact sim configuration. If no template is provided, the runner loads an official default build JSON from the checked-out `wowsims/mop` UI files when one can be resolved for the exported spec. If no official default build is available, it fails closed instead of inventing sim settings. For automatic frontend EP upgrade inclusion in upgrade mode, use a WoWSims share link or `IndividualSimSettings` JSON that includes UI settings; `RaidSimRequest` JSON does not contain EP weights.
 5. Choose one of:
    - `normal` - current gear only.
    - `batch` - current gear plus bag-item combinations.
-   - `upgrade` - single-item replacements and an upgrade report.
+   - `upgrade` - single-item replacements and an upgrade report, with automatic frontend EP upgrade candidates when EP weights are available.
 6. For `batch` or `upgrade`, paste the WSE bag-items export when prompted.
 
 ## Noninteractive examples
@@ -92,12 +92,19 @@ Upgrade sims from bag items, reporting upgrades of at least 5% DPS:
 python wowsims_mop_runner.py \
   --mode upgrade \
   --export @my_wse_export.json \
-  --template @my_known_good_raid_sim_request.json \
+  --template "https://www.wowsims.com/mop/windwalker_monk/#..." \
   --bag-export @my_wse_bag_export.json \
   --iterations 20000 \
   --upgrade-threshold 5 \
   --workers 4
 ```
+
+In upgrade mode only, the runner automatically adds DB items that the WoWSims
+frontend EP scorer would show as positive EP deltas for the current gearset,
+using the same canonical UI item/gem/reforge data and the EP weights from the
+provided `IndividualSimSettings`/share link. Use `--no-auto-ep-upgrades` to
+disable this auto-add path. If no nonzero EP weights are available, the runner
+prints a warning and continues with the normal bag/DB candidate source.
 
 Scan local DB candidates instead of bag candidates:
 
@@ -105,7 +112,7 @@ Scan local DB candidates instead of bag candidates:
 python wowsims_mop_runner.py \
   --mode upgrade \
   --export @my_wse_export.json \
-  --template @my_known_good_raid_sim_request.json \
+  --template "https://www.wowsims.com/mop/windwalker_monk/#..." \
   --upgrade-candidate-source db \
   --phase 4 \
   --min-ilvl 522 \
@@ -122,7 +129,7 @@ Resume an interrupted run by choosing a stable output directory:
 python wowsims_mop_runner.py \
   --mode upgrade \
   --export @my_wse_export.json \
-  --template @my_known_good_raid_sim_request.json \
+  --template "https://www.wowsims.com/mop/windwalker_monk/#..." \
   --bag-export @my_wse_bag_export.json \
   --output-dir ./wowsims_mop_results/my_upgrade_run \
   --resume
@@ -137,6 +144,7 @@ results CSV includes the request hash used for resume lookup.
 Every run writes to a timestamped folder under `wowsims_mop_results/`:
 
 - `effective_raid_sim_request.json`
+- `effective_ep_weights_stats.json` when EP weights were available from the input/template
 - `normal_report.md`, `batch_report.md`, or `upgrade_report.md`
 - `batch_results.csv` or `upgrade_results.csv`
 - `skipped_items.csv` when candidate items are rejected before simming
@@ -176,6 +184,7 @@ The current MoP `wowsimcli` is a low-level sim runner. It accepts `RaidSimReques
 - It can inject WSE gear/talents/glyphs into that template. WSE glyph spell IDs are converted to WoWSims glyph item IDs using the canonical local `glyphIds` database table, matching the official Addon importer behavior.
 - For WSE-only input, it resolves the exported class/spec to the official UI spec directory, parses `defaultBuild: Presets.X` from `sim.ts` or `sim.tsx`, resolves `X` through `presets.ts`, and uses the imported `.build.json` as the default `IndividualSimSettings` before injecting WSE gear/talents/glyphs. When a spec has no explicit `defaultBuild`, the runner can also use a listed build whose embedded equipment exactly matches the UI `defaults.gear` preset. If a spec has no unambiguous official build JSON, the runner refuses to run without `--template`.
 - It can run single-item replacement simulations.
+- Automatic frontend EP upgrade inclusion is upgrade-mode only and requires nonzero EP weights from a WoWSims share link or `IndividualSimSettings` JSON. It does not invent default EP weights from TypeScript preset code.
 - It will not pretend to have fully optimized gem/enchant/reforge results unless a proven upstream optimizer adapter is added.
 - `--require-optimizer` remains fail-closed. The current upstream optimizer lives in browser UI code and worker-backed reforge logic, not in `wowsimcli`.
 - For exact production-quality UI settings, continue to provide a known-good template/share link from the official UI; the WSE-only path uses the official default build, not a custom UI configuration.
