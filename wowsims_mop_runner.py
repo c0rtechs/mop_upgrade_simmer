@@ -826,6 +826,11 @@ def sim_cache_paths(run_dir: Path, label: str, request: Mapping[str, Any]) -> Si
     )
 
 
+def ensure_sim_cache_dirs(paths: SimCachePaths) -> None:
+    paths.request_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.result_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def ensure_executable(path: Path) -> None:
     if os.name == "nt":
         return
@@ -2469,6 +2474,7 @@ def run_single_sim(
 ) -> SimRunResult:
     run_dir.mkdir(parents=True, exist_ok=True)
     paths = sim_cache_paths(run_dir, label, request)
+    ensure_sim_cache_dirs(paths)
     write_json_file(paths.request_path, request)
     if resume and paths.result_path.exists():
         cached = sim_result_from_json(label, paths.request_path, paths.result_path, paths.digest, seconds=0.0)
@@ -2725,7 +2731,7 @@ def run_normal(args: argparse.Namespace, wowsimcli: Path, request: dict[str, Any
     if result.dps is not None:
         info(f"Baseline DPS: {result.dps:.2f}")
     else:
-        warn(f"Sim failed: {result.error}")
+        die(f"Sim failed: {result.error}")
 
 
 def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:

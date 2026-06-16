@@ -130,6 +130,15 @@ class PayloadParsingTests(unittest.TestCase):
         self.assertEqual(paths.request_path, Path("runs") / "_requests" / f"{paths.digest}.request.json")
         self.assertEqual(paths.result_path, Path("runs") / "_results" / f"{paths.digest}.result.json")
 
+    def test_ensure_sim_cache_dirs_creates_request_and_result_parents(self):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = runner.sim_cache_paths(Path(temp) / "runs", "label", {"raid": {"a": 1}})
+
+            runner.ensure_sim_cache_dirs(paths)
+
+            self.assertTrue(paths.request_path.parent.is_dir())
+            self.assertTrue(paths.result_path.parent.is_dir())
+
     def test_item_spec_mod_summary_reports_selected_mods(self):
         spec = {"id": 1, "gems": [10, 0, 11], "enchant": 22, "reforging": 33, "upgrade_step": 2}
 
