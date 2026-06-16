@@ -103,6 +103,41 @@ class CanonicalItemDatabaseTests(unittest.TestCase):
 
         self.assertEqual(text, "Reputation: Shado-Pan at Exalted (Horde)")
 
+    def test_wowhead_source_parser_reads_plain_looted_from_prose(self):
+        html = "<html><body><p>It is looted from Burilgi Despoiler.</p></body></html>"
+
+        self.assertEqual(runner.extract_wowhead_source(html), "Dropped by: Burilgi Despoiler")
+
+    def test_wowhead_source_parser_includes_listview_difficulty_and_zone(self):
+        html = """
+        <script>
+        new Listview({
+          id: 'dropped-by',
+          data: [
+            { id: 123, name_enus: 'Sha of Fear', location: [6622], modes: { 5: 15.2 } }
+          ]
+        });
+        </script>
+        """
+
+        self.assertEqual(
+            runner.extract_wowhead_source(html),
+            "Dropped by: Sha of Fear (25-player Raid)",
+        )
+
+    def test_wowhead_source_parser_reads_vendor_crafting_quest_reputation_and_container(self):
+        cases = [
+            ("<p>It is sold by Commander Oxheart.</p>", "Sold by: Commander Oxheart"),
+            ("<p>It is crafted by Blacksmithing.</p>", "Created by: Blacksmithing"),
+            ("<p>It is a quest reward from The Final Power.</p>", "Reward from: The Final Power"),
+            ("<p>Requires <a href=\"/faction=1270\">Shado-Pan</a> - Exalted</p>", "Reputation: Shado-Pan at Exalted"),
+            ("<p>It is contained in Cache of Sha-Touched Gold.</p>", "Contained in: Cache of Sha-Touched Gold"),
+        ]
+
+        for html, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(runner.extract_wowhead_source(html), expected)
+
     def test_class_restricted_item_is_not_usable_by_wrong_class(self):
         meta = runner.ItemMeta(
             id=65179,

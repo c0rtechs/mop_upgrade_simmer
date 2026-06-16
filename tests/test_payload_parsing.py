@@ -18,7 +18,7 @@ class PayloadParsingTests(unittest.TestCase):
             "gear": {"items": [{"id": 1}, {"id": 2, "gems": [3, None]}]},
         }
 
-        request = runner.minimal_request_from_wse_character(character, 1000)
+        request = runner.minimal_request_from_wse_character(character, 1000, glyph_spell_to_item={123: 456123, 456: 456456})
         player = runner.get_request_player(request)
 
         self.assertEqual(player["class"], "ClassMonk")
@@ -26,7 +26,7 @@ class PayloadParsingTests(unittest.TestCase):
         self.assertIn("brewmaster_monk", player)
         self.assertEqual(player["profession1"], "Engineering")
         self.assertEqual(player["profession2"], "Blacksmithing")
-        self.assertEqual(player["glyphs"], {"major1": 123, "minor1": 456})
+        self.assertEqual(player["glyphs"], {"major1": 456123, "minor1": 456456})
         self.assertEqual(player["equipment"]["items"][1], {"id": 2, "gems": [3, 0]})
         self.assertEqual(request["sim_options"]["iterations"], 1000)
 
@@ -44,6 +44,25 @@ class PayloadParsingTests(unittest.TestCase):
         self.assertEqual(normalized[0], {"id": 10, "random_suffix": 2, "upgrade_step": 1})
         self.assertEqual(normalized[1], {})
         self.assertEqual(normalized[2], {"id": 11, "gems": [1, 0, 0], "reforging": 123})
+
+    def test_parse_decodelink_stdout_accepts_json_with_cli_prefix(self):
+        parsed = runner.parse_decodelink_stdout('decoded ok\n{"raid": {}, "simOptions": {}}\n')
+
+        self.assertEqual(parsed, {"raid": {}, "simOptions": {}})
+
+    def test_load_glyph_spell_to_item_map_from_canonical_db(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db_dir = root / "assets" / "database"
+            db_dir.mkdir(parents=True)
+            (db_dir / "db.json").write_text(
+                '{"items": [], "glyphIds": [{"itemId": 40896, "spellId": 54810}]}',
+                encoding="utf-8",
+            )
+
+            mapping = runner.load_glyph_spell_to_item_map(root)
+
+        self.assertEqual(mapping, {54810: 40896})
 
     def test_inject_wse_character_preserves_template_settings_and_replaces_gear(self):
         template = {

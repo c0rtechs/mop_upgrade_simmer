@@ -1151,14 +1151,19 @@ def run_decodelink(wowsimcli: Path, link: str, out_dir: Path) -> Any:
     result = run_cmd([str(wowsimcli), "decodelink", link], check=False, timeout=120)
     if result.returncode != 0:
         die(f"wowsimcli decodelink failed:\n{result.stderr.strip() or result.stdout.strip()}")
+    return parse_decodelink_stdout(result.stdout)
+
+
+def parse_decodelink_stdout(stdout: str) -> Any:
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError:
-        # Some builds print extra text; pull the first JSON object.
-        m = re.search(r"(\{.*\})", result.stdout, flags=re.DOTALL)
-        if not m:
-            die(f"wowsimcli decodelink did not return JSON:\n{result.stdout[:1000]}")
-        return json.loads(m.group(1))
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", stdout):
+            with contextlib.suppress(json.JSONDecodeError):
+                parsed, _end = decoder.raw_decode(stdout[match.start() :])
+                return parsed
+        die(f"wowsimcli decodelink did not return JSON:\n{stdout[:1000]}")
 
 
 def classify_payload(data: Any) -> str:
@@ -1288,7 +1293,7 @@ def normalize_equipment_spec(equipment: Any) -> dict[str, Any]:
     return {"items": [normalize_item_spec(item) if item else {} for item in items]}
 
 
-def normalize_wse_glyphs(glyphs: Any) -> dict[str, int]:
+def normalize_wse_glyphs(glyphs: Any, glyph_spell_to_item: Mapping[int, int] | None = None) -> dict[str, int]:
     if not isinstance(glyphs, dict):
         return {}
     out: dict[str, int] = {}
@@ -1296,6 +1301,10 @@ def normalize_wse_glyphs(glyphs: Any) -> dict[str, int]:
     def glyph_id(entry: Any) -> int | None:
         if isinstance(entry, dict):
             value = entry.get("spellID", entry.get("spellId", entry.get("spell_id")))
+            spell_id = as_int(value)
+            if glyph_spell_to_item is not None:
+                return glyph_spell_to_item.get(spell_id or 0, 0)
+            return spell_id
         else:
             value = entry
         with contextlib.suppress(TypeError, ValueError):
@@ -1399,7 +1408,11 @@ def default_encounter() -> dict[str, Any]:
     }
 
 
-def minimal_request_from_wse_character(character: dict[str, Any], iterations: int) -> dict[str, Any]:
+def minimal_request_from_wse_character(
+    character: dict[str, Any],
+    iterations: int,
+    glyph_spell_to_item: Mapping[int, int] | None = None,
+) -> dict[str, Any]:
     class_enum = proto_enum_from_wse_class(character.get("class"))
     race_enum = proto_enum_from_wse_race(character.get("race"))
     spec_field = spec_field_from_wse(character.get("class"), character.get("spec"))
@@ -1410,7 +1423,7 @@ def minimal_request_from_wse_character(character: dict[str, Any], iterations: in
         "class": class_enum,
         "equipment": normalize_equipment_spec(character.get("gear")),
         "talents_string": str(character.get("talents") or ""),
-        "glyphs": normalize_wse_glyphs(character.get("glyphs")),
+        "glyphs": normalize_wse_glyphs(character.get("glyphs"), glyph_spell_to_item),
         "profession1": profession1,
         "profession2": profession2,
     }
@@ -1427,7 +1440,12 @@ def minimal_request_from_wse_character(character: dict[str, Any], iterations: in
     }
 
 
-def inject_wse_character_into_request(request: dict[str, Any], character: dict[str, Any], iterations: int | None = None) -> dict[str, Any]:
+def inject_wse_character_into_request(
+    request: dict[str, Any],
+    character: dict[str, Any],
+    iterations: int | None = None,
+    glyph_spell_to_item: Mapping[int, int] | None = None,
+) -> dict[str, Any]:
     req = copy.deepcopy(request)
     player = get_request_player(req)
     player["equipment"] = normalize_equipment_spec(character.get("gear"))
@@ -1435,7 +1453,7 @@ def inject_wse_character_into_request(request: dict[str, Any], character: dict[s
     if character.get("talents"):
         player["talents_string"] = str(character.get("talents"))
         player.pop("talentsString", None)
-    glyphs = normalize_wse_glyphs(character.get("glyphs"))
+    glyphs = normalize_wse_glyphs(character.get("glyphs"), glyph_spell_to_item)
     if glyphs:
         player["glyphs"] = glyphs
     class_enum = proto_enum_from_wse_class(character.get("class"))
@@ -1462,6 +1480,7 @@ def build_request_from_payload(
     out_dir: Path,
     iterations: int,
     template_blob: str = "",
+    glyph_spell_to_item: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
     if kind == "raid_request":
         req = copy.deepcopy(payload)
@@ -1482,13 +1501,13 @@ def build_request_from_payload(
             set_iterations(base, iterations)
         else:
             die(f"Template/share-link input must decode to IndividualSimSettings or RaidSimRequest, got {t_kind!r}.")
-        return inject_wse_character_into_request(base, payload, iterations=iterations)
+        return inject_wse_character_into_request(base, payload, iterations=iterations, glyph_spell_to_item=glyph_spell_to_item)
 
     warn(
         "No WoWSims template/share link was provided. Building a minimal request from WSE only. "
         "This may be rejected by the sim or may not match your normal buffs/APL/encounter."
     )
-    return minimal_request_from_wse_character(payload, iterations)
+    return minimal_request_from_wse_character(payload, iterations, glyph_spell_to_item=glyph_spell_to_item)
 
 
 def set_iterations(request: dict[str, Any], iterations: int | None) -> None:
@@ -1563,6 +1582,24 @@ def load_canonical_item_index(mop_dir: Path) -> dict[int, ItemMeta]:
             if meta.id and (meta.id not in index or richer_meta(meta, index[meta.id])):
                 index[meta.id] = meta
     return index
+
+
+def load_glyph_spell_to_item_map(mop_dir: Path) -> dict[int, int]:
+    mapping: dict[int, int] = {}
+    for path in canonical_db_paths(mop_dir):
+        if not path.exists():
+            continue
+        data = read_json_file(path)
+        if not isinstance(data, Mapping):
+            continue
+        for glyph in data.get("glyphIds", []) or []:
+            if not isinstance(glyph, Mapping):
+                continue
+            spell_id = as_int(glyph.get("spellId"))
+            item_id = as_int(glyph.get("itemId"))
+            if spell_id and item_id:
+                mapping[spell_id] = item_id
+    return mapping
 
 
 def parse_json_item_file(text: str, index: dict[int, ItemMeta]) -> None:
@@ -2025,6 +2062,29 @@ def wowhead_source_lookup(item_id: int, cache_dir: Path) -> str:
 
 def extract_wowhead_source(page: str) -> str:
     text = html.unescape(page)
+    prose_patterns = [
+        ("Dropped by", r"\bIt is looted from\s+([^.<]+)"),
+        ("Sold by", r"\bIt is sold by\s+([^.<]+)"),
+        ("Created by", r"\bIt is crafted by\s+([^.<]+)"),
+        ("Created by", r"\bIt is created by\s+([^.<]+)"),
+        ("Reward from", r"\bIt is a quest reward from\s+([^.<]+)"),
+        ("Contained in", r"\bIt is contained in\s+([^.<]+)"),
+    ]
+    for label, pattern in prose_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            name = re.sub(r"\s+", " ", re.sub(r"<.*?>", "", match.group(1))).strip()
+            if name:
+                return f"{label}: {name}"
+
+    plain_text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text))
+    rep_match = re.search(r"Requires\s+(.+?)\s+[-–]\s+([A-Za-z]+)", plain_text, flags=re.IGNORECASE)
+    if rep_match:
+        faction = re.sub(r"\s+", " ", rep_match.group(1)).strip()
+        level = rep_match.group(2).strip()
+        if faction and level:
+            return f"Reputation: {faction} at {level}"
+
     # Best effort against Wowhead's generated JS/listview markup.
     labels = [
         ("Dropped by", r"id:\s*['\"]dropped-by['\"].{0,12000}"),
@@ -2049,8 +2109,26 @@ def extract_wowhead_source(page: str) -> str:
             if names:
                 break
         if names:
-            return f"{label}: " + ", ".join(names[:5])
+            source = f"{label}: " + ", ".join(names[:5])
+            if label == "Dropped by":
+                difficulties = wowhead_listview_difficulties(chunk)
+                if difficulties:
+                    source += " (" + ", ".join(difficulties) + ")"
+            return source
     return ""
+
+
+def wowhead_listview_difficulties(chunk: str) -> list[str]:
+    difficulties: list[str] = []
+    for modes in re.findall(r"modes\s*:\s*\{([^}]*)\}", chunk, flags=re.IGNORECASE | re.DOTALL):
+        for mode_id_s in re.findall(r"(\d+)\s*:", modes):
+            mode_id = as_int(mode_id_s)
+            if mode_id is None:
+                continue
+            name = SOURCE_DIFFICULTY_NAMES.get(mode_id)
+            if name and name != "Unknown" and name not in difficulties:
+                difficulties.append(name)
+    return difficulties
 
 
 # ----------------------------- Usability / candidates -------------------------
@@ -2962,6 +3040,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ensure_repo(MOP_REPO_URL, paths.mop, skip_update=args.skip_update)
     ensure_repo(EXPORTER_REPO_URL, paths.exporter, skip_update=args.skip_update)
     wowsimcli = ensure_wowsimcli(paths, force_download=args.force_cli_download)
+    glyph_spell_to_item = load_glyph_spell_to_item_map(paths.mop)
+    if not glyph_spell_to_item:
+        warn("Could not load WoWSims glyph spell-to-item mapping; WSE glyph imports may be incomplete.")
 
     out_dir = args.output_dir.expanduser().resolve() if args.output_dir else paths.results / utc_stamp()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2982,7 +3063,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         die(f"Unknown mode {mode!r}")
 
     template_blob = maybe_prompt_template(kind, args)
-    request = build_request_from_payload(kind, payload, wowsimcli, out_dir, iterations=args.iterations, template_blob=template_blob)
+    request = build_request_from_payload(
+        kind,
+        payload,
+        wowsimcli,
+        out_dir,
+        iterations=args.iterations,
+        template_blob=template_blob,
+        glyph_spell_to_item=glyph_spell_to_item,
+    )
     write_json_file(out_dir / "effective_raid_sim_request.json", request)
 
     if mode == "normal":

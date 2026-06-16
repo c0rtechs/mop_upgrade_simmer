@@ -37,7 +37,7 @@ The known hard parts are intentionally isolated:
 - [x] If backend bulk APIs are absent, optimize the Python multi-process runner with stable request hashing, result caching, resume support, and safe process limits.
 - [x] Replace the metadata scanner with direct loading of the canonical generated item database.
 - [x] Resolve `UIItemSource` into human-readable source text using local `UINPC` and `UIZone` tables before falling back to Wowhead.
-- [ ] Improve Wowhead fallback parsing for MoP Classic pages, including drop bosses, raid difficulty, vendors, crafting spells, quests, reputation, and contained-in sources.
+- [x] Improve Wowhead fallback parsing for MoP Classic pages, including drop bosses, raid difficulty, vendors, crafting spells, quests, reputation, and contained-in sources.
 - [ ] Enforce usable-item filtering:
   - [x] Class allowlist.
   - [x] Armor proficiency.
@@ -56,7 +56,7 @@ The known hard parts are intentionally isolated:
   - [x] Optimization details: gems, enchants, reforges selected.
   - [x] Skipped items and exact skip reason.
 - [ ] Add regression tests for:
-  - [ ] `decodelink` share-link parsing.
+  - [x] `decodelink` share-link parsing.
   - [x] WSE character parsing.
   - [x] WSE bag parsing.
   - [x] IndividualSimSettings -> RaidSimRequest conversion.

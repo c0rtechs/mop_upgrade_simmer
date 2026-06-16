@@ -151,7 +151,7 @@ The current tested upstream revisions for this metadata path were:
 The current MoP `wowsimcli` is a low-level sim runner. It accepts `RaidSimRequest` protojson and emits `RaidSimResult` JSON. The browser UI contains additional import, default-setting, batch, reforge, gem, and enchant behavior. This script is designed around that reality:
 
 - It can run accurate sims when given a known-good WoWSims template/share link or `RaidSimRequest` JSON.
-- It can inject WSE gear/talents/glyphs into that template.
+- It can inject WSE gear/talents/glyphs into that template. WSE glyph spell IDs are converted to WoWSims glyph item IDs using the canonical local `glyphIds` database table, matching the official Addon importer behavior.
 - It can run single-item replacement simulations.
 - It will not pretend to have fully optimized gem/enchant/reforge results unless a proven upstream optimizer adapter is added.
 - `--require-optimizer` remains fail-closed. The current upstream optimizer lives in browser UI code and worker-backed reforge logic, not in `wowsimcli`.
