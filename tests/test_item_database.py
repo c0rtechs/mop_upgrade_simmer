@@ -54,6 +54,22 @@ def write_canonical_db(root: Path) -> Path:
     return db_path
 
 
+def request_for_player(class_enum: str, race: str = "RaceHuman", spec_field: str | None = None, items: list[dict] | None = None) -> dict:
+    player = {
+        "class": class_enum,
+        "race": race,
+        "equipment": {"items": items or []},
+    }
+    if spec_field:
+        player[spec_field] = {}
+    return {
+        "raid": {
+            "parties": [{"players": [player]}],
+            "num_active_parties": 1,
+        }
+    }
+
+
 class CanonicalItemDatabaseTests(unittest.TestCase):
     def test_loads_canonical_db_json_with_resolved_drop_source(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -110,21 +126,7 @@ class CanonicalItemDatabaseTests(unittest.TestCase):
         self.assertEqual(reason, "phase 5 is above requested phase 4")
 
     def test_candidate_builder_returns_skipped_reasons(self):
-        request = {
-            "raid": {
-                "parties": [
-                    {
-                        "players": [
-                            {
-                                "class": "ClassWarrior",
-                                "equipment": {"items": []},
-                            }
-                        ]
-                    }
-                ],
-                "num_active_parties": 1,
-            }
-        }
+        request = request_for_player("ClassWarrior")
         db = {
             1: runner.ItemMeta(
                 id=1,
@@ -150,6 +152,145 @@ class CanonicalItemDatabaseTests(unittest.TestCase):
         self.assertEqual(skipped[0].item_id, 1)
         self.assertEqual(skipped[0].item_name, "future")
         self.assertEqual(skipped[0].reason, "phase 5 is above requested phase 4")
+
+    def test_hunter_melee_weapon_is_rejected_by_official_class_rules(self):
+        request = request_for_player("ClassHunter", spec_field="marksmanship_hunter")
+        db = {
+            1: runner.ItemMeta(
+                id=1,
+                name="Axe for Someone Else",
+                type="ItemTypeWeapon",
+                weapon_type="WeaponTypeAxe",
+                hand_type="HandTypeOneHand",
+            )
+        }
+
+        candidates, skipped = runner.build_candidate_specs(
+            request,
+            "none",
+            None,
+            db,
+            source_mode="db",
+            max_db_candidates=0,
+            min_ilvl=None,
+            max_ilvl=None,
+        )
+
+        self.assertEqual(candidates, [])
+        self.assertIn("weapon type WeaponTypeAxe not usable by ClassHunter", skipped[0].reason)
+
+    def test_hunter_ranged_weapon_replaces_main_hand(self):
+        request = request_for_player("ClassHunter", spec_field="marksmanship_hunter")
+        db = {
+            1: runner.ItemMeta(
+                id=1,
+                name="Longbow",
+                type="ItemTypeRanged",
+                ranged_weapon_type="RangedWeaponTypeBow",
+            )
+        }
+
+        candidates, skipped = runner.build_candidate_specs(
+            request,
+            "none",
+            None,
+            db,
+            source_mode="db",
+            max_db_candidates=0,
+            min_ilvl=None,
+            max_ilvl=None,
+        )
+        replacements = runner.replacement_requests_for_item(request, candidates[0], db)
+
+        self.assertEqual(skipped, [])
+        self.assertEqual([slot for _label, _req, slot, _slot_name in replacements], [14])
+
+    def test_one_hand_weapon_does_not_generate_offhand_replacement_for_non_dual_wielder(self):
+        request = request_for_player("ClassMage", spec_field="frost_mage")
+        db = {
+            1: runner.ItemMeta(
+                id=1,
+                name="Spell Sword",
+                type="ItemTypeWeapon",
+                weapon_type="WeaponTypeSword",
+                hand_type="HandTypeOneHand",
+            )
+        }
+
+        candidates, _skipped = runner.build_candidate_specs(
+            request,
+            "none",
+            None,
+            db,
+            source_mode="db",
+            max_db_candidates=0,
+            min_ilvl=None,
+            max_ilvl=None,
+        )
+        replacements = runner.replacement_requests_for_item(request, candidates[0], db)
+
+        self.assertEqual([slot for _label, _req, slot, _slot_name in replacements], [14])
+
+    def test_faction_restricted_item_is_rejected_when_player_race_proves_wrong_faction(self):
+        request = request_for_player("ClassWarrior", race="RaceOrc", spec_field="arms_warrior")
+        db = {
+            1: runner.ItemMeta(
+                id=1,
+                name="Alliance Ring",
+                type="ItemTypeFinger",
+                faction_restriction="Alliance",
+            )
+        }
+
+        candidates, skipped = runner.build_candidate_specs(
+            request,
+            "none",
+            None,
+            db,
+            source_mode="db",
+            max_db_candidates=0,
+            min_ilvl=None,
+            max_ilvl=None,
+        )
+
+        self.assertEqual(candidates, [])
+        self.assertIn("restricted to Alliance", skipped[0].reason)
+
+    def test_limit_category_conflict_only_allows_replacing_conflicting_slot(self):
+        request = request_for_player(
+            "ClassWarrior",
+            spec_field="arms_warrior",
+            items=[{} for _ in range(13)],
+        )
+        request["raid"]["parties"][0]["players"][0]["equipment"]["items"][12] = {"id": 10}
+        db = {
+            10: runner.ItemMeta(
+                id=10,
+                name="Equipped Trinket",
+                type="ItemTypeTrinket",
+                limit_category=99,
+            ),
+            11: runner.ItemMeta(
+                id=11,
+                name="Candidate Trinket",
+                type="ItemTypeTrinket",
+                limit_category=99,
+            ),
+        }
+
+        candidates, _skipped = runner.build_candidate_specs(
+            request,
+            "none",
+            None,
+            db,
+            source_mode="db",
+            max_db_candidates=0,
+            min_ilvl=None,
+            max_ilvl=None,
+        )
+        replacements = runner.replacement_requests_for_item(request, candidates[0], db)
+
+        self.assertEqual([slot for _label, _req, slot, _slot_name in replacements], [12])
 
 
 if __name__ == "__main__":

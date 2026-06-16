@@ -26,7 +26,7 @@ The known hard parts are intentionally isolated:
 - [ ] Replace all heuristic WSE -> request conversion with the same mapping used by the official UI importer.
 - [ ] Add a deterministic path to create a valid `RaidSimRequest` from WSE-only input for every launched MoP spec, using official presets/defaults where available.
 - [ ] Add a test fixture for at least one exported WSE character JSON and verify the generated `RaidSimRequest` is accepted by `wowsimcli sim`.
-- [ ] Add fixture tests for WSE bag export parsing and slot mapping.
+- [x] Add fixture tests for WSE bag export parsing and slot mapping.
 - [ ] Implement true optimizer support for candidate items:
   - [ ] Auto-gem candidate based on official gem optimizer/default gems.
   - [ ] Auto-enchant candidate based on official enchant optimizer/default enchants.
@@ -34,18 +34,18 @@ The known hard parts are intentionally isolated:
   - [ ] Preserve profession-only gem/enchant restrictions.
   - [ ] Handle hit/expertise caps and soft caps exactly like the UI.
 - [ ] If MoP backend supports bulk sim APIs, add a local CLI patch/overlay command and have Python call it instead of one process per candidate.
-- [ ] If backend bulk APIs are absent, optimize the Python multi-process runner with stable request hashing, result caching, resume support, and safe process limits.
+- [x] If backend bulk APIs are absent, optimize the Python multi-process runner with stable request hashing, result caching, resume support, and safe process limits.
 - [x] Replace the metadata scanner with direct loading of the canonical generated item database.
 - [x] Resolve `UIItemSource` into human-readable source text using local `UINPC` and `UIZone` tables before falling back to Wowhead.
 - [ ] Improve Wowhead fallback parsing for MoP Classic pages, including drop bosses, raid difficulty, vendors, crafting spells, quests, reputation, and contained-in sources.
 - [ ] Enforce usable-item filtering:
   - [x] Class allowlist.
   - [x] Armor proficiency.
-  - [ ] Weapon proficiency.
-  - [ ] Hand/offhand/two-hand constraints.
-  - [ ] Unique-equipped and limit-category constraints.
+  - [x] Weapon proficiency.
+  - [x] Hand/offhand/two-hand constraints.
+  - [x] Unique-equipped and limit-category constraints.
   - [x] Profession requirements.
-  - [ ] Faction restrictions.
+  - [x] Faction restrictions.
   - [x] Phase and item-level filters.
 - [x] Add a `--phase` option and default it from the template/settings when possible.
 - [ ] Add richer reports:
@@ -57,13 +57,13 @@ The known hard parts are intentionally isolated:
   - [x] Skipped items and exact skip reason.
 - [ ] Add regression tests for:
   - [ ] `decodelink` share-link parsing.
-  - [ ] WSE character parsing.
-  - [ ] WSE bag parsing.
+  - [x] WSE character parsing.
+  - [x] WSE bag parsing.
   - [ ] IndividualSimSettings -> RaidSimRequest conversion.
-  - [ ] Request gear injection.
-  - [ ] DPS extraction from `RaidSimResult`.
+  - [x] Request gear injection.
+  - [x] DPS extraction from `RaidSimResult`.
   - [x] Item source formatting.
-  - [ ] Slot filtering and class usability.
+  - [x] Slot filtering and class usability.
 - [ ] Ensure Windows, macOS, and Linux behavior works.
 - [ ] Update the README with exact tested commands and known limitations.
 
@@ -71,11 +71,11 @@ The known hard parts are intentionally isolated:
 
 - [ ] `python wowsims_mop_runner.py --mode normal --export @fixtures/<spec>_wse.json --template @fixtures/<spec>_template.json --iterations 1000 --no-prompt` runs successfully and prints baseline DPS.
 - [ ] `upgrade` mode runs baseline plus single-swap candidate sims from a WSE bag export and writes `upgrade_report.md` + `upgrade_results.csv`.
-- [ ] Every upgrade row includes item name, slot, DPS, percent change, and best available source location.
+- [x] Every upgrade row includes item name, slot, DPS, percent change, and best available source location.
 - [ ] When optimizer support is enabled, every candidate request is gemmed/enchanted/reforged using the official WoWSims logic or an explicitly equivalent backend implementation.
 - [ ] If optimizer support is not available, the script refuses `--require-optimizer` and clearly annotates report rows as not fully optimized.
-- [ ] No skipped item is skipped silently; every skip has a reason.
-- [ ] The script never reports a candidate as usable unless the local DB or official importer proves it is usable.
+- [x] No skipped item is skipped silently; every skip has a reason.
+- [x] The script never reports a candidate as usable unless the local DB or official importer proves it is usable.
 - [ ] Existing behavior remains stdlib-only from Python's perspective.
 
 ## Final deliverable

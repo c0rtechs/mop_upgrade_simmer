@@ -41,6 +41,7 @@ import copy
 import csv
 import dataclasses
 import datetime as _dt
+import hashlib
 import html
 import itertools
 import json
@@ -127,8 +128,10 @@ ITEM_TYPE_TO_SLOT_INDEXES = {
     "trinket": [12, 13],
     "ItemTypeWeapon": [14, 15],
     "weapon": [14, 15],
-    "ItemTypeRanged": [16],
-    "ranged": [16],
+    # MoP equips bows/crossbows/guns/wands through the weapon flow. The old
+    # exported ranged index is legacy WSE shape, not a proto ItemSlot.
+    "ItemTypeRanged": [14],
+    "ranged": [14],
 }
 
 CLASS_ENUM_BY_WSE = {
@@ -422,19 +425,174 @@ CLASS_ARMOR_MAX = {
 }
 ARMOR_ORDER = ["ArmorTypeCloth", "ArmorTypeLeather", "ArmorTypeMail", "ArmorTypePlate"]
 
-# Conservative weapon usability by class. This should be tightened by Codex against game data / sim DB.
-CLASS_WEAPONS = {
-    "ClassMonk": {"WeaponTypeAxe", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeStaff", "WeaponTypeSword"},
-    "ClassWarrior": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeShield", "WeaponTypeStaff", "WeaponTypeSword"},
-    "ClassPaladin": {"WeaponTypeAxe", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeShield", "WeaponTypeSword"},
-    "ClassRogue": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypeSword"},
-    "ClassHunter": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeStaff", "WeaponTypeSword"},
-    "ClassDeathKnight": {"WeaponTypeAxe", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeSword"},
-    "ClassShaman": {"WeaponTypeAxe", "WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypeShield", "WeaponTypeStaff"},
-    "ClassDruid": {"WeaponTypeDagger", "WeaponTypeFist", "WeaponTypeMace", "WeaponTypePolearm", "WeaponTypeStaff"},
-    "ClassPriest": {"WeaponTypeDagger", "WeaponTypeMace", "WeaponTypeStaff", "WeaponTypeOffHand"},
-    "ClassMage": {"WeaponTypeDagger", "WeaponTypeStaff", "WeaponTypeSword", "WeaponTypeOffHand"},
-    "ClassWarlock": {"WeaponTypeDagger", "WeaponTypeStaff", "WeaponTypeSword", "WeaponTypeOffHand"},
+# Mirrors mop/ui/core/player_classes/*.ts. The bool is the upstream
+# EligibleWeaponType.canUseTwoHand flag.
+CLASS_WEAPON_ELIGIBILITY = {
+    "ClassWarrior": {
+        "WeaponTypeAxe": True,
+        "WeaponTypeDagger": False,
+        "WeaponTypeFist": False,
+        "WeaponTypeMace": True,
+        "WeaponTypeOffHand": False,
+        "WeaponTypePolearm": True,
+        "WeaponTypeShield": False,
+        "WeaponTypeStaff": True,
+        "WeaponTypeSword": True,
+    },
+    "ClassPaladin": {
+        "WeaponTypeAxe": True,
+        "WeaponTypeMace": True,
+        "WeaponTypeOffHand": False,
+        "WeaponTypePolearm": True,
+        "WeaponTypeShield": False,
+        "WeaponTypeSword": True,
+    },
+    "ClassHunter": {},
+    "ClassRogue": {
+        "WeaponTypeAxe": False,
+        "WeaponTypeDagger": False,
+        "WeaponTypeFist": False,
+        "WeaponTypeMace": False,
+        "WeaponTypeOffHand": False,
+        "WeaponTypeSword": False,
+    },
+    "ClassPriest": {
+        "WeaponTypeDagger": False,
+        "WeaponTypeMace": False,
+        "WeaponTypeOffHand": False,
+        "WeaponTypeStaff": True,
+    },
+    "ClassDeathKnight": {
+        "WeaponTypeAxe": True,
+        "WeaponTypeMace": True,
+        "WeaponTypePolearm": True,
+        "WeaponTypeSword": True,
+    },
+    "ClassShaman": {
+        "WeaponTypeAxe": True,
+        "WeaponTypeDagger": False,
+        "WeaponTypeFist": False,
+        "WeaponTypeMace": True,
+        "WeaponTypeOffHand": False,
+        "WeaponTypeShield": False,
+        "WeaponTypeStaff": True,
+    },
+    "ClassMage": {
+        "WeaponTypeDagger": False,
+        "WeaponTypeOffHand": False,
+        "WeaponTypeStaff": True,
+        "WeaponTypeSword": False,
+    },
+    "ClassWarlock": {
+        "WeaponTypeDagger": False,
+        "WeaponTypeOffHand": False,
+        "WeaponTypeStaff": True,
+        "WeaponTypeSword": False,
+    },
+    "ClassMonk": {
+        "WeaponTypeAxe": False,
+        "WeaponTypeFist": False,
+        "WeaponTypeMace": False,
+        "WeaponTypeOffHand": False,
+        "WeaponTypePolearm": True,
+        "WeaponTypeStaff": True,
+        "WeaponTypeSword": False,
+    },
+    "ClassDruid": {
+        "WeaponTypeDagger": False,
+        "WeaponTypeFist": False,
+        "WeaponTypeMace": True,
+        "WeaponTypeOffHand": False,
+        "WeaponTypePolearm": True,
+        "WeaponTypeStaff": True,
+    },
+}
+CLASS_RANGED_WEAPONS = {
+    "ClassWarrior": {"RangedWeaponTypeBow", "RangedWeaponTypeCrossbow", "RangedWeaponTypeGun", "RangedWeaponTypeThrown"},
+    "ClassPaladin": set(),
+    "ClassHunter": {"RangedWeaponTypeBow", "RangedWeaponTypeCrossbow", "RangedWeaponTypeGun"},
+    "ClassRogue": set(),
+    "ClassPriest": {"RangedWeaponTypeWand"},
+    "ClassDeathKnight": set(),
+    "ClassShaman": set(),
+    "ClassMage": {"RangedWeaponTypeWand"},
+    "ClassWarlock": {"RangedWeaponTypeWand"},
+    "ClassMonk": set(),
+    "ClassDruid": set(),
+}
+
+SPEC_ENUM_BY_PLAYER_FIELD = {
+    "blood_death_knight": "SpecBloodDeathKnight",
+    "frost_death_knight": "SpecFrostDeathKnight",
+    "unholy_death_knight": "SpecUnholyDeathKnight",
+    "balance_druid": "SpecBalanceDruid",
+    "feral_druid": "SpecFeralDruid",
+    "guardian_druid": "SpecGuardianDruid",
+    "restoration_druid": "SpecRestorationDruid",
+    "beast_mastery_hunter": "SpecBeastMasteryHunter",
+    "marksmanship_hunter": "SpecMarksmanshipHunter",
+    "survival_hunter": "SpecSurvivalHunter",
+    "arcane_mage": "SpecArcaneMage",
+    "fire_mage": "SpecFireMage",
+    "frost_mage": "SpecFrostMage",
+    "brewmaster_monk": "SpecBrewmasterMonk",
+    "mistweaver_monk": "SpecMistweaverMonk",
+    "windwalker_monk": "SpecWindwalkerMonk",
+    "holy_paladin": "SpecHolyPaladin",
+    "protection_paladin": "SpecProtectionPaladin",
+    "retribution_paladin": "SpecRetributionPaladin",
+    "discipline_priest": "SpecDisciplinePriest",
+    "holy_priest": "SpecHolyPriest",
+    "shadow_priest": "SpecShadowPriest",
+    "assassination_rogue": "SpecAssassinationRogue",
+    "combat_rogue": "SpecCombatRogue",
+    "subtlety_rogue": "SpecSubtletyRogue",
+    "elemental_shaman": "SpecElementalShaman",
+    "enhancement_shaman": "SpecEnhancementShaman",
+    "restoration_shaman": "SpecRestorationShaman",
+    "affliction_warlock": "SpecAfflictionWarlock",
+    "demonology_warlock": "SpecDemonologyWarlock",
+    "destruction_warlock": "SpecDestructionWarlock",
+    "arms_warrior": "SpecArmsWarrior",
+    "fury_warrior": "SpecFuryWarrior",
+    "protection_warrior": "SpecProtectionWarrior",
+}
+
+DUAL_WIELD_SPECS = {
+    "SpecArmsWarrior",
+    "SpecFuryWarrior",
+    "SpecProtectionWarrior",
+    "SpecBeastMasteryHunter",
+    "SpecMarksmanshipHunter",
+    "SpecSurvivalHunter",
+    "SpecBloodDeathKnight",
+    "SpecFrostDeathKnight",
+    "SpecUnholyDeathKnight",
+    "SpecAssassinationRogue",
+    "SpecCombatRogue",
+    "SpecSubtletyRogue",
+    "SpecEnhancementShaman",
+    "SpecBrewmasterMonk",
+    "SpecWindwalkerMonk",
+}
+
+ALLIANCE_RACES = {
+    "RaceHuman",
+    "RaceDwarf",
+    "RaceNightElf",
+    "RaceGnome",
+    "RaceDraenei",
+    "RaceWorgen",
+    "RaceAlliancePandaren",
+}
+HORDE_RACES = {
+    "RaceBloodElf",
+    "RaceOrc",
+    "RaceTauren",
+    "RaceTroll",
+    "RaceUndead",
+    "RaceGoblin",
+    "RaceHordePandaren",
 }
 
 SOURCE_DIFFICULTY_NAMES = DIFFICULTY_NAMES
@@ -480,12 +638,30 @@ class SkippedItem:
     reason: str
 
 
+@dataclasses.dataclass(frozen=True)
+class PlayerContext:
+    class_enum: str
+    spec_enum: str
+    race_enum: str
+    faction: str
+    professions: frozenset[str]
+
+    @property
+    def can_dual_wield(self) -> bool:
+        return self.spec_enum in DUAL_WIELD_SPECS
+
+    @property
+    def can_dual_wield_two_hand(self) -> bool:
+        return self.spec_enum == "SpecFuryWarrior"
+
+
 @dataclasses.dataclass
 class SimRunResult:
     label: str
     request_path: Path
     result_path: Path
     dps: float | None
+    request_hash: str = ""
     percent_change: float | None = None
     item_id: int | None = None
     item_name: str = ""
@@ -505,6 +681,13 @@ class RunnerPaths:
     cache: Path
     bin_dir: Path
     results: Path
+
+
+@dataclasses.dataclass(frozen=True)
+class SimCachePaths:
+    digest: str
+    request_path: Path
+    result_path: Path
 
 
 # ----------------------------- Generic utilities -----------------------------
@@ -605,10 +788,19 @@ def write_json_file(path: Path, data: Any, pretty: bool = True) -> None:
             json.dump(data, f, separators=(",", ":"), sort_keys=False)
 
 
-def safe_filename(label: str, max_len: int = 90) -> str:
-    label = re.sub(r"[^A-Za-z0-9_.@+-]+", "_", label.strip())
-    label = re.sub(r"_+", "_", label).strip("_") or "run"
-    return label[:max_len]
+def request_hash(request: Mapping[str, Any]) -> str:
+    canonical = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def sim_cache_paths(run_dir: Path, label: str, request: Mapping[str, Any]) -> SimCachePaths:
+    del label
+    digest = request_hash(request)
+    return SimCachePaths(
+        digest=digest,
+        request_path=run_dir / "_requests" / f"{digest}.request.json",
+        result_path=run_dir / "_results" / f"{digest}.result.json",
+    )
 
 
 def ensure_executable(path: Path) -> None:
@@ -1502,8 +1694,22 @@ def item_name(item_id: int, item_index: Mapping[int, ItemMeta]) -> str:
     return meta.name if meta and meta.name else f"Item {item_id}"
 
 
-def slot_indexes_for_item(meta: ItemMeta | None, item_spec: Mapping[str, Any] | None = None) -> list[int]:
+def slot_indexes_for_item(
+    meta: ItemMeta | None,
+    item_spec: Mapping[str, Any] | None = None,
+    context: PlayerContext | None = None,
+) -> list[int]:
     if meta:
+        if meta.type == "ItemTypeWeapon":
+            if context and context.can_dual_wield_two_hand:
+                return [14, 15]
+            if meta.hand_type == "HandTypeMainHand":
+                return [14]
+            if meta.hand_type == "HandTypeOffHand":
+                return [15]
+            return [14, 15]
+        if meta.type == "ItemTypeRanged":
+            return [14]
         keys = [meta.type, normalize_text(meta.type), normalize_key(meta.type)]
         for key in keys:
             if key in ITEM_TYPE_TO_SLOT_INDEXES:
@@ -1526,6 +1732,131 @@ def slot_indexes_for_item(meta: ItemMeta | None, item_spec: Mapping[str, Any] | 
                     if normalize_key(slot).endswith(norm) or norm.endswith(normalize_key(slot)):
                         return idxs
     return []
+
+
+def equipped_item_meta_by_slot(request: dict[str, Any], item_index: Mapping[int, ItemMeta]) -> dict[int, ItemMeta]:
+    equipped: dict[int, ItemMeta] = {}
+    for idx, item in enumerate(request_equipment_items(request)):
+        if not isinstance(item, Mapping):
+            continue
+        item_id = as_int(item.get("id"))
+        if item_id is None:
+            continue
+        meta = item_index.get(item_id)
+        if meta is not None:
+            equipped[idx] = meta
+    return equipped
+
+
+def item_conflict_slots(candidate: ItemMeta, equipped_by_slot: Mapping[int, ItemMeta]) -> list[int]:
+    conflicts: list[int] = []
+    for slot, equipped in equipped_by_slot.items():
+        if candidate.unique and equipped.id == candidate.id:
+            conflicts.append(slot)
+            continue
+        if candidate.limit_category not in (None, 0) and equipped.limit_category == candidate.limit_category:
+            conflicts.append(slot)
+    return conflicts
+
+
+def unique_or_limit_conflict(items: Sequence[Any], item_index: Mapping[int, ItemMeta]) -> str:
+    seen_unique: dict[int, str] = {}
+    seen_limit: dict[int, str] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = as_int(item.get("id"))
+        if item_id is None:
+            continue
+        meta = item_index.get(item_id)
+        if meta is None:
+            continue
+        if meta.unique:
+            if meta.id in seen_unique:
+                return f"duplicate unique item {meta.name or meta.id}"
+            seen_unique[meta.id] = meta.name or str(meta.id)
+        if meta.limit_category not in (None, 0):
+            if meta.limit_category in seen_limit:
+                return f"duplicate limit category {meta.limit_category}"
+            seen_limit[meta.limit_category] = meta.name or str(meta.id)
+    return ""
+
+
+def weapon_combo_conflict(items: Sequence[Any], item_index: Mapping[int, ItemMeta], context: PlayerContext) -> str:
+    def meta_at(idx: int) -> ItemMeta | None:
+        if len(items) <= idx or not isinstance(items[idx], Mapping):
+            return None
+        item_id = as_int(items[idx].get("id"))
+        return item_index.get(item_id) if item_id is not None else None
+
+    main_hand = meta_at(14)
+    off_hand = meta_at(15)
+    if main_hand is not None and off_hand is not None:
+        if main_hand.hand_type == "HandTypeTwoHand" and (not context.can_dual_wield_two_hand or main_hand.weapon_type == "WeaponTypeStaff"):
+            return "main-hand two-handed weapon conflicts with equipped off hand"
+        if off_hand.hand_type == "HandTypeTwoHand" and (not context.can_dual_wield_two_hand or off_hand.weapon_type == "WeaponTypeStaff"):
+            return "offhand two-handed weapon is not a valid weapon combo"
+    return ""
+
+
+def is_item_usable_in_slot(meta: ItemMeta | None, context: PlayerContext, slot_idx: int) -> tuple[bool, str]:
+    ok, reason = is_item_usable(meta, context.class_enum, set(context.professions), faction=context.faction)
+    if not ok:
+        return ok, reason
+    if meta is None:
+        return False, "missing item metadata; cannot prove item is usable"
+    if meta.type == "ItemTypeWeapon":
+        if slot_idx == 14 and meta.hand_type == "HandTypeOffHand":
+            return False, "offhand-only weapon cannot be equipped in main hand"
+        if slot_idx == 15 and meta.hand_type == "HandTypeMainHand":
+            return False, "main-hand-only weapon cannot be equipped in off hand"
+        if slot_idx == 15 and meta.hand_type == "HandTypeTwoHand" and not context.can_dual_wield_two_hand:
+            return False, "two-handed weapon cannot be equipped in off hand by this spec"
+        if (
+            slot_idx == 15
+            and meta.hand_type in {"HandTypeOneHand", "HandTypeOffHand"}
+            and meta.weapon_type not in {"WeaponTypeShield", "WeaponTypeOffHand"}
+            and not context.can_dual_wield
+        ):
+            return False, "offhand weapon requires a dual-wield spec"
+        if slot_idx == 15 and meta.hand_type == "HandTypeTwoHand" and meta.weapon_type == "WeaponTypeStaff":
+            return False, "two-handed staves cannot be equipped in off hand"
+    if meta.type == "ItemTypeRanged" and slot_idx != 14:
+        return False, "MoP ranged weapons must use the main-hand weapon slot"
+    return True, ""
+
+
+def eligible_slot_indexes_for_item(
+    meta: ItemMeta | None,
+    item_spec: Mapping[str, Any] | None,
+    context: PlayerContext,
+    equipped_by_slot: Mapping[int, ItemMeta],
+) -> tuple[list[int], str]:
+    slots = slot_indexes_for_item(meta, item_spec, context)
+    if not slots:
+        return [], "no recognized equip slot"
+
+    usable_slots: list[int] = []
+    rejected: list[str] = []
+    for slot in slots:
+        ok, reason = is_item_usable_in_slot(meta, context, slot)
+        if ok:
+            usable_slots.append(slot)
+        elif reason:
+            rejected.append(reason)
+
+    if meta is not None and usable_slots:
+        conflicts = item_conflict_slots(meta, equipped_by_slot)
+        if conflicts:
+            conflict_set = set(conflicts)
+            usable_slots = [slot for slot in usable_slots if conflict_set == {slot}]
+            if not usable_slots:
+                names = ", ".join(GEAR_INDEX_TO_SLOT.get(slot, f"slot{slot}") for slot in conflicts)
+                rejected.append(f"unique/limit-category conflict with equipped {names}")
+
+    if usable_slots:
+        return usable_slots, ""
+    return [], rejected[0] if rejected else "no legal equip slot for this player"
 
 
 def source_text_for_item(item_id: int, item_index: Mapping[int, ItemMeta], cache_dir: Path, no_wowhead: bool = False) -> str:
@@ -1685,7 +2016,12 @@ def is_item_in_phase(meta: ItemMeta | None, phase: int | None) -> tuple[bool, st
     return True, ""
 
 
-def is_item_usable(meta: ItemMeta | None, class_enum: str, professions: set[str]) -> tuple[bool, str]:
+def is_item_usable(
+    meta: ItemMeta | None,
+    class_enum: str,
+    professions: set[str],
+    faction: str = "",
+) -> tuple[bool, str]:
     if meta is None:
         return False, "missing item metadata; cannot prove item is usable"
     if meta.class_allowlist:
@@ -1696,24 +2032,72 @@ def is_item_usable(meta: ItemMeta | None, class_enum: str, professions: set[str]
         req = str(meta.required_profession)
         if req not in {"ProfessionUnknown", "0", ""} and req not in professions:
             return False, f"requires profession {req}"
+    if meta.faction_restriction and faction:
+        if meta.faction_restriction != faction:
+            return False, f"restricted to {meta.faction_restriction}; player faction is {faction}"
     # Armor restriction only for armor slots, not cloak/neck/rings/trinkets/weapons.
     if meta.armor_type and meta.type in {"ItemTypeHead", "ItemTypeShoulder", "ItemTypeChest", "ItemTypeWrist", "ItemTypeHands", "ItemTypeWaist", "ItemTypeLegs", "ItemTypeFeet"}:
         max_armor = CLASS_ARMOR_MAX.get(class_enum)
         if max_armor and meta.armor_type in ARMOR_ORDER:
             if ARMOR_ORDER.index(meta.armor_type) > ARMOR_ORDER.index(max_armor):
                 return False, f"armor type {meta.armor_type} is above class max {max_armor}"
-    if meta.type == "ItemTypeWeapon" and meta.weapon_type:
-        allowed = CLASS_WEAPONS.get(class_enum)
-        if allowed and meta.weapon_type not in allowed:
+    if meta.type == "ItemTypeWeapon":
+        eligibility = CLASS_WEAPON_ELIGIBILITY.get(class_enum)
+        if eligibility is None:
+            return False, f"no weapon usability rules for {class_enum}"
+        if not meta.weapon_type:
+            return False, "weapon type missing; cannot prove weapon usability"
+        if meta.weapon_type not in eligibility:
             return False, f"weapon type {meta.weapon_type} not usable by {class_enum}"
+        if meta.hand_type == "HandTypeTwoHand" and not eligibility[meta.weapon_type]:
+            return False, f"two-handed {meta.weapon_type} not usable by {class_enum}"
+    if meta.type == "ItemTypeRanged":
+        allowed_ranged = CLASS_RANGED_WEAPONS.get(class_enum)
+        if allowed_ranged is None:
+            return False, f"no ranged weapon usability rules for {class_enum}"
+        if not meta.ranged_weapon_type:
+            return False, "ranged weapon type missing; cannot prove ranged weapon usability"
+        if meta.ranged_weapon_type not in allowed_ranged:
+            return False, f"ranged weapon type {meta.ranged_weapon_type} not usable by {class_enum}"
     return True, ""
 
 
 def player_class_and_professions(request: dict[str, Any]) -> tuple[str, set[str]]:
+    context = player_context_from_request(request)
+    return context.class_enum, set(context.professions)
+
+
+def player_spec_enum(player: Mapping[str, Any]) -> str:
+    for field, spec_enum in SPEC_ENUM_BY_PLAYER_FIELD.items():
+        if field in player:
+            return spec_enum
+    value = player.get("spec") or player.get("spec_enum") or player.get("specEnum")
+    if isinstance(value, str) and value.startswith("Spec"):
+        return value
+    return "SpecUnknown"
+
+
+def faction_from_race(race_enum: str) -> str:
+    if race_enum in ALLIANCE_RACES:
+        return "Alliance"
+    if race_enum in HORDE_RACES:
+        return "Horde"
+    return ""
+
+
+def player_context_from_request(request: dict[str, Any]) -> PlayerContext:
     player = get_request_player(request)
     class_enum = str(player.get("class") or player.get("class_") or "ClassUnknown")
-    professions = {str(player.get("profession1") or ""), str(player.get("profession2") or "")}
-    return class_enum, professions
+    race_enum = str(player.get("race") or "RaceUnknown")
+    faction = str(player.get("faction") or "") or faction_from_race(race_enum)
+    professions = frozenset(str(x) for x in (player.get("profession1") or "", player.get("profession2") or "") if x)
+    return PlayerContext(
+        class_enum=class_enum,
+        spec_enum=player_spec_enum(player),
+        race_enum=race_enum,
+        faction=faction,
+        professions=professions,
+    )
 
 
 def request_phase(request: Mapping[str, Any]) -> int | None:
@@ -1765,7 +2149,8 @@ def build_candidate_specs(
     phase: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[SkippedItem]]:
     equipped_ids = {int(item.get("id")) for item in request_equipment_items(request) if isinstance(item, dict) and item.get("id")}
-    class_enum, professions = player_class_and_professions(request)
+    context = player_context_from_request(request)
+    equipped_by_slot = equipped_item_meta_by_slot(request, item_index)
     candidates: dict[int, dict[str, Any]] = {}
     skipped: list[SkippedItem] = []
 
@@ -1797,12 +2182,13 @@ def build_candidate_specs(
             if not ok:
                 skip(item_id, reason)
                 continue
-            ok, _reason = is_item_usable(meta, class_enum, professions)
+            ok, _reason = is_item_usable(meta, context.class_enum, set(context.professions), faction=context.faction)
             if not ok:
                 skip(item_id, _reason)
                 continue
-            if not slot_indexes_for_item(meta):
-                skip(item_id, "no recognized equip slot")
+            slots, reason = eligible_slot_indexes_for_item(meta, {"id": item_id}, context, equipped_by_slot)
+            if not slots:
+                skip(item_id, reason)
                 continue
             candidates[item_id] = {"id": item_id}
             added += 1
@@ -1812,16 +2198,16 @@ def build_candidate_specs(
     usable: list[dict[str, Any]] = []
     for item_id, spec in candidates.items():
         meta = item_index.get(item_id)
-        slots = slot_indexes_for_item(meta, spec)
-        if not slots:
-            skip(item_id, "no recognized equip slot")
-            continue
         ok, reason = is_item_in_phase(meta, phase)
         if not ok:
             skip(item_id, reason)
             continue
-        ok, reason = is_item_usable(meta, class_enum, professions)
+        ok, reason = is_item_usable(meta, context.class_enum, set(context.professions), faction=context.faction)
         if not ok:
+            skip(item_id, reason)
+            continue
+        slots, reason = eligible_slot_indexes_for_item(meta, spec, context, equipped_by_slot)
+        if not slots:
             skip(item_id, reason)
             continue
         usable.append(normalize_item_spec(spec))
@@ -1834,13 +2220,12 @@ def build_candidate_specs(
 def replacement_requests_for_item(base_request: dict[str, Any], item_spec: dict[str, Any], item_index: Mapping[int, ItemMeta]) -> list[tuple[str, dict[str, Any], int, str]]:
     item_id = int(item_spec.get("id") or 0)
     meta = item_index.get(item_id)
-    indexes = slot_indexes_for_item(meta, item_spec)
+    context = player_context_from_request(base_request)
+    indexes, _reason = eligible_slot_indexes_for_item(meta, item_spec, context, equipped_item_meta_by_slot(base_request, item_index))
     if not indexes:
         return []
     out: list[tuple[str, dict[str, Any], int, str]] = []
     for idx in indexes:
-        if idx == 16:
-            continue  # MoP proto does not enumerate a ranged slot.
         req = copy.deepcopy(base_request)
         items = request_equipment_items(req)
         while len(items) <= idx:
@@ -1862,10 +2247,13 @@ def combination_requests(
     max_combinations: int,
 ) -> list[tuple[str, dict[str, Any], tuple[int, ...]]]:
     # Choices per slot: None/current or one of the candidates for that slot.
+    context = player_context_from_request(base_request)
+    equipped_by_slot = equipped_item_meta_by_slot(base_request, item_index)
     by_slot: dict[int, list[dict[str, Any]]] = {idx: [] for idx in range(16)}
     for spec in candidates:
         meta = item_index.get(int(spec.get("id") or 0))
-        for idx in slot_indexes_for_item(meta, spec):
+        indexes, _reason = eligible_slot_indexes_for_item(meta, spec, context, equipped_by_slot)
+        for idx in indexes:
             if 0 <= idx <= 15:
                 by_slot[idx].append(spec)
     slots = [idx for idx, specs in by_slot.items() if specs]
@@ -1893,8 +2281,14 @@ def combination_requests(
             normalized = normalize_item_spec(spec)
             items[idx] = normalized
             item_id = int(normalized.get("id") or 0)
+            meta = item_index.get(item_id)
+            if idx == 14 and meta and meta.hand_type == "HandTypeTwoHand" and len(items) > 15:
+                items[15] = {}
             used_ids.append(item_id)
             labels.append(f"{item_name(item_id, item_index)}@{GEAR_INDEX_TO_SLOT.get(idx, idx)}")
+        conflict = unique_or_limit_conflict(items, item_index) or weapon_combo_conflict(items, item_index, context)
+        if conflict:
+            continue
         label = "; ".join(labels)
         out.append((label, req, tuple(used_ids)))
     return out
@@ -1948,33 +2342,61 @@ def recursive_find_dps(obj: Any) -> float | None:
     return None
 
 
-def run_single_sim(wowsimcli: Path, request: dict[str, Any], run_dir: Path, label: str, timeout: int, verbose: bool = False) -> SimRunResult:
+def sim_result_from_json(
+    label: str,
+    request_path: Path,
+    result_path: Path,
+    digest: str,
+    seconds: float,
+) -> SimRunResult:
+    try:
+        result = read_json_file(result_path)
+    except Exception as exc:  # noqa: BLE001
+        return SimRunResult(
+            label=label,
+            request_path=request_path,
+            result_path=result_path,
+            request_hash=digest,
+            dps=None,
+            error=f"Could not parse result JSON: {exc}",
+            seconds=seconds,
+        )
+    if isinstance(result, dict):
+        err = result.get("error") or result.get("Error")
+        if isinstance(err, dict) and err.get("message"):
+            return SimRunResult(label=label, request_path=request_path, result_path=result_path, request_hash=digest, dps=None, error=str(err.get("message")), seconds=seconds)
+    dps = extract_dps(result)
+    if dps is None:
+        return SimRunResult(label=label, request_path=request_path, result_path=result_path, request_hash=digest, dps=None, error="Result did not contain a DPS average", seconds=seconds)
+    return SimRunResult(label=label, request_path=request_path, result_path=result_path, request_hash=digest, dps=dps, seconds=seconds)
+
+
+def run_single_sim(
+    wowsimcli: Path,
+    request: dict[str, Any],
+    run_dir: Path,
+    label: str,
+    timeout: int,
+    verbose: bool = False,
+    resume: bool = False,
+) -> SimRunResult:
     run_dir.mkdir(parents=True, exist_ok=True)
-    safe = safe_filename(label)
-    request_path = run_dir / f"{safe}.request.json"
-    result_path = run_dir / f"{safe}.result.json"
-    write_json_file(request_path, request)
+    paths = sim_cache_paths(run_dir, label, request)
+    write_json_file(paths.request_path, request)
+    if resume and paths.result_path.exists():
+        cached = sim_result_from_json(label, paths.request_path, paths.result_path, paths.digest, seconds=0.0)
+        if cached.dps is not None or cached.error:
+            return cached
     start = time.perf_counter()
-    cmd = [str(wowsimcli), "sim", "--infile", str(request_path), "--outfile", str(result_path)]
+    cmd = [str(wowsimcli), "sim", "--infile", str(paths.request_path), "--outfile", str(paths.result_path)]
     if verbose:
         cmd.append("--verbose")
     proc = run_cmd(cmd, check=False, timeout=timeout)
     seconds = time.perf_counter() - start
     if proc.returncode != 0:
         err = proc.stderr.strip() or proc.stdout.strip() or f"wowsimcli exited {proc.returncode}"
-        return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error=err, seconds=seconds)
-    try:
-        result = read_json_file(result_path)
-    except Exception as exc:  # noqa: BLE001
-        return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error=f"Could not parse result JSON: {exc}", seconds=seconds)
-    if isinstance(result, dict):
-        err = result.get("error") or result.get("Error")
-        if isinstance(err, dict) and err.get("message"):
-            return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error=str(err.get("message")), seconds=seconds)
-    dps = extract_dps(result)
-    if dps is None:
-        return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=None, error="Result did not contain a DPS average", seconds=seconds)
-    return SimRunResult(label=label, request_path=request_path, result_path=result_path, dps=dps, seconds=seconds)
+        return SimRunResult(label=label, request_path=paths.request_path, result_path=paths.result_path, request_hash=paths.digest, dps=None, error=err, seconds=seconds)
+    return sim_result_from_json(label, paths.request_path, paths.result_path, paths.digest, seconds=seconds)
 
 
 def run_many_sims(
@@ -1984,16 +2406,21 @@ def run_many_sims(
     timeout: int,
     workers: int,
     verbose: bool = False,
+    resume: bool = False,
 ) -> list[SimRunResult]:
     results: list[SimRunResult] = []
     total = len(jobs)
     if total == 0:
         return []
+    safe_workers = max(1, min(int(workers or 1), total, os.cpu_count() or 1))
+    if safe_workers != workers:
+        warn(f"Adjusted worker count from {workers} to {safe_workers} for safe local process limits.")
+    workers = safe_workers
     info(f"Running {total:,} sims with {workers} worker(s)")
 
     def one(job: tuple[str, dict[str, Any], dict[str, Any]]) -> SimRunResult:
         label, req, meta = job
-        result = run_single_sim(wowsimcli, req, run_dir, label, timeout=timeout, verbose=verbose)
+        result = run_single_sim(wowsimcli, req, run_dir, label, timeout=timeout, verbose=verbose, resume=resume)
         for key, value in meta.items():
             setattr(result, key, value)
         return result
@@ -2037,6 +2464,7 @@ def write_results_csv(path: Path, results: Sequence[SimRunResult]) -> None:
         "optimization_status",
         "error",
         "seconds",
+        "request_hash",
         "request_path",
         "result_path",
     ]
@@ -2056,6 +2484,7 @@ def write_results_csv(path: Path, results: Sequence[SimRunResult]) -> None:
                     "optimization_status": r.optimization_status,
                     "error": r.error,
                     "seconds": f"{r.seconds:.2f}",
+                    "request_hash": r.request_hash,
                     "request_path": str(r.request_path),
                     "result_path": str(r.result_path),
                 }
@@ -2174,7 +2603,7 @@ def escape_md(text: Any) -> str:
 
 
 def run_normal(args: argparse.Namespace, wowsimcli: Path, request: dict[str, Any], out_dir: Path) -> None:
-    result = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
+    result = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli, resume=args.resume)
     write_normal_report(out_dir / "normal_report.md", result, result.request_path)
     if result.dps is not None:
         info(f"Baseline DPS: {result.dps:.2f}")
@@ -2203,7 +2632,7 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
     if not candidates:
         detail = f" Skipped item reasons were written to {skipped_csv}." if skipped_csv is not None else ""
         die(f"No usable upgrade candidates were found. Provide a WSE bag export or use --upgrade-candidate-source db/both.{detail}")
-    baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
+    baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli, resume=args.resume)
     if baseline.dps is None:
         die(f"Baseline sim failed, cannot compare upgrades. Error:\n{baseline.error}")
     info(f"Baseline DPS: {baseline.dps:.2f}")
@@ -2230,7 +2659,7 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
     if args.max_upgrade_sims and len(jobs) > args.max_upgrade_sims:
         warn(f"Capping upgrade sim jobs from {len(jobs):,} to {args.max_upgrade_sims:,}. Use --max-upgrade-sims 0 for no cap.")
         jobs = jobs[: args.max_upgrade_sims]
-    results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli)
+    results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli, resume=args.resume)
     for r in results:
         if r.dps is not None:
             r.percent_change = ((r.dps - baseline.dps) / baseline.dps) * 100.0
@@ -2285,14 +2714,14 @@ def run_batch(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, req
     if not candidates:
         detail = f" Skipped item reasons were written to {skipped_csv}." if skipped_csv is not None else ""
         die(f"No usable batch candidates were found. Provide a WSE bag export.{detail}")
-    baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli)
+    baseline = run_single_sim(wowsimcli, request, out_dir / "runs", "baseline", timeout=args.timeout, verbose=args.verbose_cli, resume=args.resume)
     if baseline.dps is None:
         die(f"Baseline sim failed, cannot compare batch results. Error:\n{baseline.error}")
     combos = combination_requests(request, candidates, item_index, max_combinations=args.max_batch_combinations)
     jobs: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     for label, req, used_ids in combos:
         jobs.append((label, req, {"optimization_status": optimizer_status(args, None)}))
-    results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli)
+    results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli, resume=args.resume)
     for r in results:
         if r.dps is not None:
             r.percent_change = ((r.dps - baseline.dps) / baseline.dps) * 100.0
@@ -2329,6 +2758,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--workdir", type=Path, default=None, help="Folder where mop/exporter/results/cache should live. Default: script folder.")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Use this result folder instead of creating a timestamped folder.")
+    parser.add_argument("--resume", action="store_true", help="Reuse cached sim result JSONs in --output-dir when request hashes match.")
     parser.add_argument("--skip-update", action="store_true", help="Do not fetch/pull existing repos.")
     parser.add_argument("--force-cli-download", action="store_true", help="Force re-download/rebuild of wowsimcli.")
     parser.add_argument("--mode", choices=["normal", "batch", "upgrade"], default=None, help="Simulation mode. Prompts if omitted.")
@@ -2403,7 +2834,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ensure_repo(EXPORTER_REPO_URL, paths.exporter, skip_update=args.skip_update)
     wowsimcli = ensure_wowsimcli(paths, force_download=args.force_cli_download)
 
-    out_dir = paths.results / utc_stamp()
+    out_dir = args.output_dir.expanduser().resolve() if args.output_dir else paths.results / utc_stamp()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     export_blob = load_blob_or_path(args.export) if args.export else ""

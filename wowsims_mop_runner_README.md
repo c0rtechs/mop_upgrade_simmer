@@ -4,8 +4,8 @@ This bundle contains a Python orchestration script for running local WoWSims Mis
 
 ## Files
 
-- `wowsims_mop_runner.py` — main Python script.
-- `CODEX_GOAL_wowsims_mop_runner.md` — a `/goal` prompt for Codex to harden the repo-specific adapters.
+- `wowsims_mop_runner.py` - main Python script.
+- `CODEX_GOAL_wowsims_mop_runner.md` - a `/goal` prompt for Codex to harden the repo-specific adapters.
 
 ## Requirements
 
@@ -47,9 +47,9 @@ On first run, it will create:
 3. Start the script and paste the WSE export when prompted.
 4. When prompted for a WoWSims template/share link, provide a known-good WoWSims share link or `RaidSimRequest` JSON for the same class/spec. This preserves your sim settings, APL, buffs, debuffs, and encounter settings.
 5. Choose one of:
-   - `normal` — current gear only.
-   - `batch` — current gear plus bag-item combinations.
-   - `upgrade` — single-item replacements and an upgrade report.
+   - `normal` - current gear only.
+   - `batch` - current gear plus bag-item combinations.
+   - `upgrade` - single-item replacements and an upgrade report.
 6. For `batch` or `upgrade`, paste the WSE bag-items export when prompted.
 
 ## Noninteractive examples
@@ -94,6 +94,22 @@ python wowsims_mop_runner.py \
 `--phase` limits candidate items to a maximum MoP content phase. If omitted, the
 runner uses a phase value from template/settings JSON when one is present.
 
+Resume an interrupted run by choosing a stable output directory:
+
+```bash
+python wowsims_mop_runner.py \
+  --mode upgrade \
+  --export @my_wse_export.json \
+  --template @my_known_good_raid_sim_request.json \
+  --bag-export @my_wse_bag_export.json \
+  --output-dir ./wowsims_mop_results/my_upgrade_run \
+  --resume
+```
+
+Sim requests and results are cached by a stable SHA-256 hash of the canonical
+`RaidSimRequest` JSON under `runs/_requests/` and `runs/_results/`. The
+results CSV includes the request hash used for resume lookup.
+
 ## Output
 
 Every run writes to a timestamped folder under `wowsims_mop_results/`:
@@ -102,7 +118,8 @@ Every run writes to a timestamped folder under `wowsims_mop_results/`:
 - `normal_report.md`, `batch_report.md`, or `upgrade_report.md`
 - `batch_results.csv` or `upgrade_results.csv`
 - `skipped_items.csv` when candidate items are rejected before simming
-- per-sim request/result JSON files under `runs/`
+- hash-addressed per-sim request/result JSON files under `runs/_requests/` and
+  `runs/_results/`
 
 ## Item metadata and sources
 
@@ -134,6 +151,20 @@ The current MoP `wowsimcli` is a low-level sim runner. It accepts `RaidSimReques
 - It will not pretend to have fully optimized gem/enchant/reforge results unless a proven upstream optimizer adapter is added.
 - `--require-optimizer` remains fail-closed. The current upstream optimizer lives in browser UI code and worker-backed reforge logic, not in `wowsimcli`.
 - WSE-only request generation still uses local mapping helpers. For production-quality sim settings, continue to provide a known-good template/share link from the official UI.
-- Candidate filtering now uses canonical DB class, armor, profession, item-level, and phase data. Full UI-equivalent weapon-slot, hand/offhand, unique-equipped, limit-category, and faction filtering is still not complete.
+- Candidate filtering uses canonical DB class, armor, weapon/ranged weapon, hand/offhand, profession, faction, unique-equipped, limit-category, item-level, and phase data. Weapon and slot rules mirror the upstream UI class tables and `canEquipItem` behavior where it can be represented from the local request.
+
+## Validation
+
+Current local validation commands:
+
+```bash
+python -m unittest -v
+python -m py_compile wowsims_mop_runner.py tests/test_item_database.py tests/test_payload_parsing.py
+```
+
+The saved local `exports/equipped_only_export.json` and
+`exports/batch_bag_items_export.json` were also used as a smoke check for the
+canonical DB candidate path. They are local user data and are not required by
+the test suite.
 
 Use `CODEX_GOAL_wowsims_mop_runner.md` to have Codex wire the repo-specific importer/optimizer layer into the script.
