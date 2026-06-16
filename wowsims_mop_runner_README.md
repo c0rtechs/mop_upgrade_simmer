@@ -121,6 +121,11 @@ Every run writes to a timestamped folder under `wowsims_mop_results/`:
 - hash-addressed per-sim request/result JSON files under `runs/_requests/` and
   `runs/_results/`
 
+Upgrade CSV rows include item name, slot, item level, phase, quality, DPS,
+DPS stdev and 95% confidence half-width when reported by the sim, absolute DPS
+delta, percent delta, source text, optimization status, selected
+gem/enchant/reforge details, request hash, and request/result paths.
+
 ## Item metadata and sources
 
 The runner loads item metadata from the generated WoWSims MoP UI database:

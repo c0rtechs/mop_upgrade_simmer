@@ -662,13 +662,21 @@ class SimRunResult:
     result_path: Path
     dps: float | None
     request_hash: str = ""
+    dps_stdev: float | None = None
+    dps_ci95: float | None = None
+    iterations_done: int | None = None
+    dps_delta: float | None = None
     percent_change: float | None = None
     item_id: int | None = None
     item_name: str = ""
+    item_ilvl: int | None = None
+    item_phase: int | None = None
+    item_quality: str = ""
     slot_index: int | None = None
     slot: str = ""
     source: str = ""
     optimization_status: str = ""
+    optimization_details: str = ""
     error: str = ""
     seconds: float = 0.0
 
@@ -788,8 +796,23 @@ def write_json_file(path: Path, data: Any, pretty: bool = True) -> None:
             json.dump(data, f, separators=(",", ":"), sort_keys=False)
 
 
+NON_SEMANTIC_REQUEST_HASH_KEYS = {"request_id", "requestId"}
+
+
+def hashable_request_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: hashable_request_payload(child)
+            for key, child in value.items()
+            if key not in NON_SEMANTIC_REQUEST_HASH_KEYS
+        }
+    if isinstance(value, list):
+        return [hashable_request_payload(child) for child in value]
+    return value
+
+
 def request_hash(request: Mapping[str, Any]) -> str:
-    canonical = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    canonical = json.dumps(hashable_request_payload(request), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -1229,6 +1252,26 @@ def normalize_item_spec(item: Any) -> dict[str, Any]:
             with contextlib.suppress(ValueError, TypeError):
                 out[key] = int(out[key])
     return out
+
+
+def item_spec_mod_summary(item: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    gems = [str(gem) for gem in item.get("gems", []) if as_int(gem)]
+    if gems:
+        parts.append("gems=" + "/".join(gems))
+    enchant = as_int(item.get("enchant"))
+    if enchant:
+        parts.append(f"enchant={enchant}")
+    reforge = as_int(item.get("reforging", item.get("reforge")))
+    if reforge:
+        parts.append(f"reforge={reforge}")
+    tinker = as_int(item.get("tinker"))
+    if tinker:
+        parts.append(f"tinker={tinker}")
+    upgrade_step = as_int(item.get("upgrade_step", item.get("upgradeStep")))
+    if upgrade_step:
+        parts.append(f"upgrade_step={upgrade_step}")
+    return "; ".join(parts) if parts else "none selected"
 
 
 def normalize_equipment_spec(equipment: Any) -> dict[str, Any]:
@@ -2298,22 +2341,26 @@ def combination_requests(
 
 
 def extract_dps(result: Any) -> float | None:
+    distribution = find_dps_distribution(result)
+    return distribution_avg(distribution)
+
+
+def find_dps_distribution(result: Any) -> Any:
     if not isinstance(result, dict):
         return None
     for raid_key in ("raidMetrics", "raid_metrics"):
         raid = result.get(raid_key)
         if isinstance(raid, dict):
-            dps = distribution_avg(raid.get("dps"))
-            if dps is not None:
-                return dps
+            if distribution_avg(raid.get("dps")) is not None:
+                return raid.get("dps")
             for party_key in ("parties",):
                 parties = raid.get(party_key)
                 if isinstance(parties, list) and parties:
-                    pdps = distribution_avg(parties[0].get("dps")) if isinstance(parties[0], dict) else None
-                    if pdps is not None:
-                        return pdps
+                    party_dps = parties[0].get("dps") if isinstance(parties[0], dict) else None
+                    if distribution_avg(party_dps) is not None:
+                        return party_dps
     # Fallback: recursively find first dps.avg.
-    return recursive_find_dps(result)
+    return recursive_find_dps_distribution(result)
 
 
 def distribution_avg(value: Any) -> float | None:
@@ -2324,19 +2371,47 @@ def distribution_avg(value: Any) -> float | None:
     return None
 
 
-def recursive_find_dps(obj: Any) -> float | None:
+def distribution_stdev(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key in ("stdev", "stddev", "stdDev", "std_dev"):
+            stdev = value.get(key)
+            if isinstance(stdev, (int, float)):
+                return float(stdev)
+    return None
+
+
+def extract_dps_stdev(result: Any) -> float | None:
+    return distribution_stdev(find_dps_distribution(result))
+
+
+def extract_iterations_done(result: Any) -> int | None:
+    if not isinstance(result, Mapping):
+        return None
+    for key in ("iterationsDone", "iterations_done"):
+        value = as_int(result.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def confidence_95_half_width(stdev: float | None, iterations: int | None) -> float | None:
+    if stdev is None or iterations is None or iterations <= 0:
+        return None
+    return 1.96 * stdev / math.sqrt(iterations)
+
+
+def recursive_find_dps_distribution(obj: Any) -> Any:
     if isinstance(obj, dict):
         if "dps" in obj:
-            avg = distribution_avg(obj["dps"])
-            if avg is not None:
-                return avg
+            if distribution_avg(obj["dps"]) is not None:
+                return obj["dps"]
         for value in obj.values():
-            found = recursive_find_dps(value)
+            found = recursive_find_dps_distribution(value)
             if found is not None:
                 return found
     elif isinstance(obj, list):
         for value in obj:
-            found = recursive_find_dps(value)
+            found = recursive_find_dps_distribution(value)
             if found is not None:
                 return found
     return None
@@ -2368,7 +2443,19 @@ def sim_result_from_json(
     dps = extract_dps(result)
     if dps is None:
         return SimRunResult(label=label, request_path=request_path, result_path=result_path, request_hash=digest, dps=None, error="Result did not contain a DPS average", seconds=seconds)
-    return SimRunResult(label=label, request_path=request_path, result_path=result_path, request_hash=digest, dps=dps, seconds=seconds)
+    dps_stdev = extract_dps_stdev(result)
+    iterations_done = extract_iterations_done(result)
+    return SimRunResult(
+        label=label,
+        request_path=request_path,
+        result_path=result_path,
+        request_hash=digest,
+        dps=dps,
+        dps_stdev=dps_stdev,
+        dps_ci95=confidence_95_half_width(dps_stdev, iterations_done),
+        iterations_done=iterations_done,
+        seconds=seconds,
+    )
 
 
 def run_single_sim(
@@ -2458,12 +2545,20 @@ def write_results_csv(path: Path, results: Sequence[SimRunResult]) -> None:
         "item_id",
         "item_name",
         "slot",
+        "item_ilvl",
+        "item_phase",
+        "item_quality",
         "dps",
+        "dps_stdev",
+        "dps_ci95",
+        "dps_delta",
         "percent_change",
         "source",
         "optimization_status",
+        "optimization_details",
         "error",
         "seconds",
+        "iterations_done",
         "request_hash",
         "request_path",
         "result_path",
@@ -2478,12 +2573,20 @@ def write_results_csv(path: Path, results: Sequence[SimRunResult]) -> None:
                     "item_id": r.item_id or "",
                     "item_name": r.item_name,
                     "slot": r.slot,
+                    "item_ilvl": r.item_ilvl or "",
+                    "item_phase": r.item_phase or "",
+                    "item_quality": r.item_quality,
                     "dps": f"{r.dps:.3f}" if r.dps is not None else "",
+                    "dps_stdev": f"{r.dps_stdev:.3f}" if r.dps_stdev is not None else "",
+                    "dps_ci95": f"{r.dps_ci95:.3f}" if r.dps_ci95 is not None else "",
+                    "dps_delta": f"{r.dps_delta:.3f}" if r.dps_delta is not None else "",
                     "percent_change": f"{r.percent_change:.4f}" if r.percent_change is not None else "",
                     "source": r.source,
                     "optimization_status": r.optimization_status,
+                    "optimization_details": r.optimization_details,
                     "error": r.error,
                     "seconds": f"{r.seconds:.2f}",
+                    "iterations_done": r.iterations_done or "",
                     "request_hash": r.request_hash,
                     "request_path": str(r.request_path),
                     "result_path": str(r.result_path),
@@ -2522,6 +2625,9 @@ def write_upgrade_report(
         "",
         f"Generated UTC: {utc_stamp()}",
         f"Baseline DPS: {baseline.dps:.2f}" if baseline.dps is not None else f"Baseline failed: {baseline.error}",
+        f"Baseline DPS stdev: {baseline.dps_stdev:.2f}" if baseline.dps_stdev is not None else "Baseline DPS stdev: not reported",
+        f"Baseline DPS 95% CI half-width: {baseline.dps_ci95:.2f}" if baseline.dps_ci95 is not None else "Baseline DPS 95% CI half-width: not reported",
+        f"Iterations done: {baseline.iterations_done}" if baseline.iterations_done is not None else "Iterations done: not reported",
         f"Upgrade threshold: {threshold:.2f}%",
         f"All results CSV: `{all_results_csv.name}`",
         "",
@@ -2531,18 +2637,23 @@ def write_upgrade_report(
     if not winners:
         lines.append("No candidate reached the configured threshold.")
     else:
-        lines.append("| Rank | Item | Slot | DPS | Upgrade % | Source | Optimization |")
-        lines.append("|---:|---|---|---:|---:|---|---|")
+        lines.append("| Rank | Item | Slot | Ilvl | Phase | Quality | DPS | Delta | Upgrade % | Source | Optimization | Details |")
+        lines.append("|---:|---|---|---:|---:|---|---:|---:|---:|---|---|---|")
         for i, r in enumerate(winners, 1):
             lines.append(
-                "| {rank} | {item} | {slot} | {dps:.2f} | {pct:.2f}% | {source} | {opt} |".format(
+                "| {rank} | {item} | {slot} | {ilvl} | {phase} | {quality} | {dps:.2f} | {delta:.2f} | {pct:.2f}% | {source} | {opt} | {details} |".format(
                     rank=i,
                     item=escape_md(r.item_name or r.label),
                     slot=escape_md(r.slot),
+                    ilvl=r.item_ilvl or "",
+                    phase=r.item_phase or "",
+                    quality=escape_md(r.item_quality),
                     dps=r.dps or 0,
+                    delta=r.dps_delta or 0,
                     pct=r.percent_change or 0,
                     source=escape_md(r.source or "Unknown"),
                     opt=escape_md(r.optimization_status or "Not annotated"),
+                    details=escape_md(r.optimization_details or "none selected"),
                 )
             )
     lines.extend(
@@ -2590,6 +2701,12 @@ def write_normal_report(path: Path, baseline: SimRunResult, request_path: Path) 
     ]
     if baseline.dps is not None:
         lines.append(f"Baseline DPS: **{baseline.dps:.2f}**")
+        if baseline.dps_stdev is not None:
+            lines.append(f"Baseline DPS stdev: **{baseline.dps_stdev:.2f}**")
+        if baseline.dps_ci95 is not None:
+            lines.append(f"Baseline DPS 95% CI half-width: **{baseline.dps_ci95:.2f}**")
+        if baseline.iterations_done is not None:
+            lines.append(f"Iterations done: **{baseline.iterations_done}**")
     else:
         lines.append(f"Sim failed: `{baseline.error}`")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -2652,7 +2769,11 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
                         "slot_index": slot_idx,
                         "slot": slot_name,
                         "source": source,
+                        "item_ilvl": meta.ilvl if meta else None,
+                        "item_phase": meta.phase if meta else None,
+                        "item_quality": meta.quality if meta else "",
                         "optimization_status": optimizer_status(args, meta),
+                        "optimization_details": item_spec_mod_summary(spec),
                     },
                 )
             )
@@ -2662,6 +2783,7 @@ def run_upgrade(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, r
     results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli, resume=args.resume)
     for r in results:
         if r.dps is not None:
+            r.dps_delta = r.dps - baseline.dps
             r.percent_change = ((r.dps - baseline.dps) / baseline.dps) * 100.0
     results.sort(key=lambda r: (r.percent_change if r.percent_change is not None else -99999, r.dps or -1), reverse=True)
     csv_path = out_dir / "upgrade_results.csv"
@@ -2724,6 +2846,7 @@ def run_batch(args: argparse.Namespace, paths: RunnerPaths, wowsimcli: Path, req
     results = run_many_sims(wowsimcli, jobs, out_dir / "runs", timeout=args.timeout, workers=args.workers, verbose=args.verbose_cli, resume=args.resume)
     for r in results:
         if r.dps is not None:
+            r.dps_delta = r.dps - baseline.dps
             r.percent_change = ((r.dps - baseline.dps) / baseline.dps) * 100.0
     results.sort(key=lambda r: (r.percent_change if r.percent_change is not None else -99999, r.dps or -1), reverse=True)
     csv_path = out_dir / "batch_results.csv"

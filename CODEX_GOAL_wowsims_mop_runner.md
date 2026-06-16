@@ -49,23 +49,23 @@ The known hard parts are intentionally isolated:
   - [x] Phase and item-level filters.
 - [x] Add a `--phase` option and default it from the template/settings when possible.
 - [ ] Add richer reports:
-  - [ ] Baseline DPS and confidence/iterations.
-  - [ ] Upgrade DPS delta and percent delta.
+  - [x] Baseline DPS and confidence/iterations.
+  - [x] Upgrade DPS delta and percent delta.
   - [x] Source location/drop/craft/vendor/quest/reputation.
-  - [ ] Slot, item level, phase, quality.
-  - [ ] Optimization details: gems, enchants, reforges selected.
+  - [x] Slot, item level, phase, quality.
+  - [x] Optimization details: gems, enchants, reforges selected.
   - [x] Skipped items and exact skip reason.
 - [ ] Add regression tests for:
   - [ ] `decodelink` share-link parsing.
   - [x] WSE character parsing.
   - [x] WSE bag parsing.
-  - [ ] IndividualSimSettings -> RaidSimRequest conversion.
+  - [x] IndividualSimSettings -> RaidSimRequest conversion.
   - [x] Request gear injection.
   - [x] DPS extraction from `RaidSimResult`.
   - [x] Item source formatting.
   - [x] Slot filtering and class usability.
 - [ ] Ensure Windows, macOS, and Linux behavior works.
-- [ ] Update the README with exact tested commands and known limitations.
+- [x] Update the README with exact tested commands and known limitations.
 
 ## Acceptance criteria
 
@@ -73,10 +73,10 @@ The known hard parts are intentionally isolated:
 - [ ] `upgrade` mode runs baseline plus single-swap candidate sims from a WSE bag export and writes `upgrade_report.md` + `upgrade_results.csv`.
 - [x] Every upgrade row includes item name, slot, DPS, percent change, and best available source location.
 - [ ] When optimizer support is enabled, every candidate request is gemmed/enchanted/reforged using the official WoWSims logic or an explicitly equivalent backend implementation.
-- [ ] If optimizer support is not available, the script refuses `--require-optimizer` and clearly annotates report rows as not fully optimized.
+- [x] If optimizer support is not available, the script refuses `--require-optimizer` and clearly annotates report rows as not fully optimized.
 - [x] No skipped item is skipped silently; every skip has a reason.
 - [x] The script never reports a candidate as usable unless the local DB or official importer proves it is usable.
-- [ ] Existing behavior remains stdlib-only from Python's perspective.
+- [x] Existing behavior remains stdlib-only from Python's perspective.
 
 ## Final deliverable
 
