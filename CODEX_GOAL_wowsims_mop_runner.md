@@ -38,7 +38,7 @@ The known hard parts are intentionally isolated:
 - [x] Replace the metadata scanner with direct loading of the canonical generated item database.
 - [x] Resolve `UIItemSource` into human-readable source text using local `UINPC` and `UIZone` tables before falling back to Wowhead.
 - [x] Improve Wowhead fallback parsing for MoP Classic pages, including drop bosses, raid difficulty, vendors, crafting spells, quests, reputation, and contained-in sources.
-- [ ] Enforce usable-item filtering:
+- [x] Enforce usable-item filtering:
   - [x] Class allowlist.
   - [x] Armor proficiency.
   - [x] Weapon proficiency.
@@ -48,14 +48,14 @@ The known hard parts are intentionally isolated:
   - [x] Faction restrictions.
   - [x] Phase and item-level filters.
 - [x] Add a `--phase` option and default it from the template/settings when possible.
-- [ ] Add richer reports:
+- [x] Add richer reports:
   - [x] Baseline DPS and confidence/iterations.
   - [x] Upgrade DPS delta and percent delta.
   - [x] Source location/drop/craft/vendor/quest/reputation.
   - [x] Slot, item level, phase, quality.
   - [x] Optimization details: gems, enchants, reforges selected.
   - [x] Skipped items and exact skip reason.
-- [ ] Add regression tests for:
+- [x] Add regression tests for:
   - [x] `decodelink` share-link parsing.
   - [x] WSE character parsing.
   - [x] WSE bag parsing.

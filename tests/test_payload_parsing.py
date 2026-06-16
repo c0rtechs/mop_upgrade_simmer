@@ -30,6 +30,48 @@ class PayloadParsingTests(unittest.TestCase):
         self.assertEqual(player["equipment"]["items"][1], {"id": 2, "gems": [3, 0]})
         self.assertEqual(request["sim_options"]["iterations"], 1000)
 
+    def test_wse_spec_mapping_accepts_mop_exporter_names(self):
+        cases = {
+            ("shaman", "elemental"): "elemental_shaman",
+            ("shaman", "enhancement"): "enhancement_shaman",
+            ("shaman", "restoration"): "restoration_shaman",
+            ("hunter", "beast_mastery"): "beast_mastery_hunter",
+            ("hunter", "marksman"): "marksmanship_hunter",
+            ("hunter", "survival"): "survival_hunter",
+            ("druid", "balance"): "balance_druid",
+            ("druid", "feral"): "feral_druid",
+            ("druid", "guardian"): "guardian_druid",
+            ("druid", "restoration"): "restoration_druid",
+            ("warlock", "affliction"): "affliction_warlock",
+            ("warlock", "demonology"): "demonology_warlock",
+            ("warlock", "destruction"): "destruction_warlock",
+            ("rogue", "assassination"): "assassination_rogue",
+            ("rogue", "combat"): "combat_rogue",
+            ("rogue", "subtlety"): "subtlety_rogue",
+            ("mage", "arcane"): "arcane_mage",
+            ("mage", "fire"): "fire_mage",
+            ("mage", "frost"): "frost_mage",
+            ("warrior", "arms"): "arms_warrior",
+            ("warrior", "fury"): "fury_warrior",
+            ("warrior", "protection"): "protection_warrior",
+            ("paladin", "holy"): "holy_paladin",
+            ("paladin", "protection"): "protection_paladin",
+            ("paladin", "retribution"): "retribution_paladin",
+            ("priest", "disc"): "discipline_priest",
+            ("priest", "holy"): "holy_priest",
+            ("priest", "shadow"): "shadow_priest",
+            ("deathknight", "blood"): "blood_death_knight",
+            ("deathknight", "frost"): "frost_death_knight",
+            ("deathknight", "unholy"): "unholy_death_knight",
+            ("monk", "brewmaster"): "brewmaster_monk",
+            ("monk", "mistweaver"): "mistweaver_monk",
+            ("monk", "windwalker"): "windwalker_monk",
+        }
+
+        for (class_name, spec_name), expected in cases.items():
+            with self.subTest(class_name=class_name, spec_name=spec_name):
+                self.assertEqual(runner.spec_field_from_wse(class_name, spec_name), expected)
+
     def test_equipment_spec_bag_payload_normalizes_item_specs(self):
         bag = {
             "items": [
@@ -71,6 +113,45 @@ class PayloadParsingTests(unittest.TestCase):
                     {
                         "players": [
                             {
+                                "class": "ClassMonk",
+                                "race": "RacePandaren",
+                                "brewmaster_monk": {},
+                                "equipment": {"items": [{"id": 99}]},
+                            }
+                        ]
+                    }
+                ],
+                "num_active_parties": 1,
+            },
+            "encounter": {"duration": 300},
+            "sim_options": {"iterations": 10},
+            "type": "SimTypeIndividual",
+        }
+        character = {
+            "class": "monk",
+            "spec": "brewmaster",
+            "race": "orc",
+            "professions": [{"name": "Engineering"}],
+            "gear": {"items": [{"id": 1}]},
+        }
+
+        request = runner.inject_wse_character_into_request(template, character, iterations=250)
+        player = runner.get_request_player(request)
+
+        self.assertEqual(request["encounter"], {"duration": 300})
+        self.assertEqual(request["sim_options"]["iterations"], 250)
+        self.assertEqual(player["class"], "ClassMonk")
+        self.assertEqual(player["race"], "RaceOrc")
+        self.assertEqual(player["profession1"], "Engineering")
+        self.assertEqual(player["equipment"], {"items": [{"id": 1}]})
+
+    def test_inject_wse_character_rejects_wrong_class_template(self):
+        template = {
+            "raid": {
+                "parties": [
+                    {
+                        "players": [
+                            {
                                 "class": "ClassWarrior",
                                 "race": "RaceHuman",
                                 "arms_warrior": {},
@@ -87,20 +168,48 @@ class PayloadParsingTests(unittest.TestCase):
         }
         character = {
             "class": "monk",
+            "spec": "brewmaster",
             "race": "orc",
-            "professions": [{"name": "Engineering"}],
             "gear": {"items": [{"id": 1}]},
         }
 
-        request = runner.inject_wse_character_into_request(template, character, iterations=250)
-        player = runner.get_request_player(request)
+        with self.assertRaises(runner.RunnerError) as ctx:
+            runner.inject_wse_character_into_request(template, character)
 
-        self.assertEqual(request["encounter"], {"duration": 300})
-        self.assertEqual(request["sim_options"]["iterations"], 250)
-        self.assertEqual(player["class"], "ClassMonk")
-        self.assertEqual(player["race"], "RaceOrc")
-        self.assertEqual(player["profession1"], "Engineering")
-        self.assertEqual(player["equipment"], {"items": [{"id": 1}]})
+        self.assertIn("Template class ClassWarrior does not match WSE class ClassMonk", str(ctx.exception))
+
+    def test_inject_wse_character_rejects_wrong_spec_template(self):
+        template = {
+            "raid": {
+                "parties": [
+                    {
+                        "players": [
+                            {
+                                "class": "ClassMonk",
+                                "race": "RacePandaren",
+                                "windwalker_monk": {},
+                                "equipment": {"items": [{"id": 99}]},
+                            }
+                        ]
+                    }
+                ],
+                "num_active_parties": 1,
+            },
+            "encounter": {"duration": 300},
+            "sim_options": {"iterations": 10},
+            "type": "SimTypeIndividual",
+        }
+        character = {
+            "class": "monk",
+            "spec": "brewmaster",
+            "race": "orc",
+            "gear": {"items": [{"id": 1}]},
+        }
+
+        with self.assertRaises(runner.RunnerError) as ctx:
+            runner.inject_wse_character_into_request(template, character)
+
+        self.assertIn("Template spec SpecWindwalkerMonk does not match WSE spec SpecBrewmasterMonk", str(ctx.exception))
 
     def test_inject_wse_character_does_not_create_duplicate_sim_options_alias(self):
         template = {

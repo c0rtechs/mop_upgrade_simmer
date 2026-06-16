@@ -186,6 +186,7 @@ SPEC_ONEOF_FIELD_BY_WSE = {
     "restoration": "restoration_druid",  # ambiguous Druid/Shaman; class disambiguated below.
     "beastmastery": "beast_mastery_hunter",
     "beast mastery": "beast_mastery_hunter",
+    "marksman": "marksmanship_hunter",
     "marksmanship": "marksmanship_hunter",
     "survival": "survival_hunter",
     "arcane": "arcane_mage",
@@ -196,6 +197,7 @@ SPEC_ONEOF_FIELD_BY_WSE = {
     "holy": "holy_paladin",  # ambiguous Priest/Paladin; class disambiguated below.
     "protection": "protection_paladin",  # ambiguous Warrior/Paladin; class disambiguated below.
     "retribution": "retribution_paladin",
+    "disc": "discipline_priest",
     "discipline": "discipline_priest",
     "shadow": "shadow_priest",
     "assassination": "assassination_rogue",
@@ -1248,6 +1250,11 @@ def spec_field_from_wse(class_name: Any, spec_name: Any) -> str:
     )
 
 
+def spec_enum_from_wse(class_name: Any, spec_name: Any) -> str:
+    field = spec_field_from_wse(class_name, spec_name)
+    return SPEC_ENUM_BY_PLAYER_FIELD.get(field, "SpecUnknown")
+
+
 def normalize_item_spec(item: Any) -> dict[str, Any]:
     if not isinstance(item, dict):
         return {}
@@ -1540,6 +1547,28 @@ def inject_wse_character_into_request(
 ) -> dict[str, Any]:
     req = copy.deepcopy(request)
     player = get_request_player(req)
+    template_class = str(player.get("class") or player.get("class_") or "ClassUnknown")
+    template_spec = player_spec_enum(player)
+    class_enum = proto_enum_from_wse_class(character.get("class"))
+    spec_enum = spec_enum_from_wse(character.get("class"), character.get("spec"))
+    if (
+        class_enum != "ClassUnknown"
+        and template_class != "ClassUnknown"
+        and template_class != class_enum
+    ):
+        die(
+            f"Template class {template_class} does not match WSE class {class_enum}. "
+            "Provide a matching WoWSims template/share link."
+        )
+    if (
+        spec_enum != "SpecUnknown"
+        and template_spec != "SpecUnknown"
+        and template_spec != spec_enum
+    ):
+        die(
+            f"Template spec {template_spec} does not match WSE spec {spec_enum}. "
+            "Provide a matching WoWSims template/share link."
+        )
     player["equipment"] = normalize_equipment_spec(character.get("gear"))
     player.pop("gear", None)
     if character.get("talents"):
@@ -1548,7 +1577,6 @@ def inject_wse_character_into_request(
     glyphs = normalize_wse_glyphs(character.get("glyphs"), glyph_spell_to_item)
     if glyphs:
         player["glyphs"] = glyphs
-    class_enum = proto_enum_from_wse_class(character.get("class"))
     race_enum = proto_enum_from_wse_race(character.get("race"))
     if class_enum != "ClassUnknown":
         player["class"] = class_enum
